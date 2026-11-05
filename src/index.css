@@ -69,3 +69,72 @@
   transform: translateY(-3px);
   min-width: 12px;
 }
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 12mm;
+  }
+
+  body,
+  .app-shell {
+    background: #fff !important;
+    color: #16202A !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .app-shell > div {
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .app-header,
+  .app-navigation,
+  .app-footer,
+  .print-hidden,
+  .app-shell .fixed,
+  .app-shell button,
+  .app-shell input,
+  .app-shell select,
+  .app-shell textarea {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .print-content {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .print-closing-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+    gap: 12px !important;
+  }
+
+  .app-shell section,
+  .app-shell article {
+    break-inside: avoid;
+    box-shadow: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .app-shell .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  .app-shell table {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 9pt !important;
+  }
+
+  .app-shell tr {
+    break-inside: avoid;
+  }
+}

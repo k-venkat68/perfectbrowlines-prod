@@ -20,6 +20,7 @@ import {
   Sparkles,
   BarChart3,
   Calendar,
+  Printer,
   RefreshCw,
   Users,
   Settings as SettingsIcon
@@ -910,12 +911,25 @@ export default function App() {
     { id: 'report', label: 'Closing report', Icon: Receipt },
     { id: 'settings', label: 'Settings', Icon: SettingsIcon }
   ] as const;
+  const canExportCurrentView = currentUser && (
+    (currentUser.role === 'SUPER_ADMIN' && (tab === 'owner' || tab === 'analytics' || tab === 'report')) ||
+    (currentUser.role === 'LOCATION_OPERATOR' && tab === 'analytics')
+  );
+  const printTitle = tab === 'report'
+    ? `Closing report · ${reportLocationLabel} · ${longDay(reportDate)}`
+    : tab === 'analytics'
+      ? `${currentUser?.role === 'SUPER_ADMIN' ? 'Business analytics' : 'Operator earnings'} · ${analyticsDateRange.label} · ${
+          currentUser?.role === 'SUPER_ADMIN'
+            ? analyticsLocation === 'all' ? 'All locations' : locName(Number(analyticsLocation))
+            : locName(loc)
+        }`
+      : `Business overview · Last 7 days`;
 
   return (
-    <div className="min-h-screen bg-[#F2F4F6] text-[#16202A] font-sans antialiased pb-20 selection:bg-[#B3315A]/20">
+    <div className="app-shell min-h-screen bg-[#F2F4F6] text-[#16202A] font-sans antialiased pb-20 selection:bg-[#B3315A]/20">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 space-y-4">
         {/* TOP HEADER & STUDIO SWITCHER */}
-        <header className="flex flex-wrap items-center justify-between gap-3 bg-white border border-[#D9DFE5] rounded-xl p-4 sm:p-5 shadow-xs">
+        <header className="app-header flex flex-wrap items-center justify-between gap-3 bg-white border border-[#D9DFE5] rounded-xl p-4 sm:p-5 shadow-xs">
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight font-serif text-[#16202A]">
@@ -982,7 +996,7 @@ export default function App() {
 
         {/* TABS NAVIGATION */}
         {currentUser && (
-          <nav className="flex flex-wrap items-center gap-1.5 pb-1 text-sm font-semibold">
+          <nav className="app-navigation flex flex-wrap items-center gap-1.5 pb-1 text-sm font-semibold">
             {currentUser?.role === 'LOCATION_OPERATOR' && <button
               type="button"
               onClick={() => {
@@ -1038,11 +1052,21 @@ export default function App() {
                 <span>{label}</span>
               </button>
             ))}
+            {canExportCurrentView && (
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#D9DFE5] bg-white text-[#5B6875] hover:border-[#B3315A]/50 hover:text-[#B3315A] cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                Export PDF
+              </button>
+            )}
             <button
               type="button"
               onClick={handleRefreshData}
               disabled={isRefreshing}
-              className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#D9DFE5] bg-white text-[#5B6875] hover:border-[#B3315A]/50 hover:text-[#B3315A] disabled:opacity-60 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#D9DFE5] bg-white text-[#5B6875] hover:border-[#B3315A]/50 hover:text-[#B3315A] disabled:opacity-60 cursor-pointer"
               aria-label="Refresh latest data"
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -1055,11 +1079,19 @@ export default function App() {
         {/* VIEW 1: CHECK-IN (LANDING SCREEN) */}
         {/* =================================================================== */}
         <motion.div
+          className="print-content"
           key={loc}
           initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
         >
+        {canExportCurrentView && (
+          <div className="print-only hidden pb-4">
+            <h1 className="text-xl font-bold text-[#16202A]">Perfect Browlines</h1>
+            <p className="text-sm font-semibold text-[#5B6875]">{printTitle}</p>
+            <p className="text-xs text-[#7A8692]">Prepared for {currentUser.fullName} · Generated {longDay(today)}</p>
+          </div>
+        )}
         {!currentUser && tab === 'checkin' && (
           <div className="space-y-6">
             {/* Check-in Form Card */}
@@ -1484,7 +1516,7 @@ export default function App() {
 
         {tab === 'analytics' && currentUser?.role === 'LOCATION_OPERATOR' && (
           <div className="space-y-5">
-            <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+            <section className="print-hidden bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
               <div>
                 <p className="text-[11px] uppercase tracking-widest text-[#B3315A] font-bold">My performance</p>
                 <h2 className="text-2xl font-bold font-serif text-[#16202A] mt-1">
@@ -1650,7 +1682,7 @@ export default function App() {
         {/* =================================================================== */}
         {tab === 'analytics' && currentUser?.role === 'SUPER_ADMIN' && (
           <div className="space-y-5">
-            <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-5">
+            <section className="print-hidden bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-[11px] uppercase tracking-widest text-[#B3315A] font-bold">Business snapshot</p>
@@ -1912,7 +1944,7 @@ export default function App() {
         {tab === 'report' && currentUser?.role === 'SUPER_ADMIN' && (
           <div className="space-y-6">
             {/* Filter Bar */}
-            <div className="p-4 bg-white border border-[#D9DFE5] rounded-xl flex flex-wrap items-end gap-3 shadow-xs">
+            <div className="print-hidden p-4 bg-white border border-[#D9DFE5] rounded-xl flex flex-wrap items-end gap-3 shadow-xs">
               <div>
                 <label className="block text-xs font-bold text-[#5B6875] mb-1">Date</label>
                 <input
@@ -1963,7 +1995,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 items-stretch gap-4">
+            <div className="print-closing-layout grid grid-cols-1 md:grid-cols-2 items-stretch gap-4">
               {/* Authentic Till Slip Receipt */}
               <section className="slip h-full min-w-0 shadow-sm space-y-2">
                 <div className="text-center font-bold text-base tracking-wide uppercase">
@@ -2731,7 +2763,7 @@ export default function App() {
         {/* =================================================================== */}
         {/* FOOTER: ADMIN / STAFF SIGN-IN AT THE VERY LAST */}
         {/* =================================================================== */}
-        <footer className="pt-8 border-t border-[#D9DFE5]/60 flex flex-col items-center justify-center gap-3 text-xs text-[#5B6875]">
+        <footer className="app-footer pt-8 border-t border-[#D9DFE5]/60 flex flex-col items-center justify-center gap-3 text-xs text-[#5B6875]">
           <div className="flex flex-wrap items-center justify-center gap-4">
             {!currentUser ? (
               <button
