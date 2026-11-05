@@ -375,12 +375,32 @@ async function seedStaffCredential(account: StaffAccountConfig): Promise<void> {
   const password = account.password;
   if (!username || !password || /^(change-me|replace|placeholder)/i.test(password)) return;
 
+  const passwordHash = await hashPassword(password);
+  if (account.role === 'SUPER_ADMIN') {
+    const existingAdmin = await StaffCredential.findOne({ role: 'SUPER_ADMIN' }).select('_id').lean();
+    if (existingAdmin) {
+      await StaffCredential.updateOne(
+        { _id: existingAdmin._id },
+        {
+          $set: {
+            username,
+            passwordHash,
+            fullName: account.fullName,
+            isActive: true
+          },
+          $unset: { loc: '' }
+        }
+      );
+      return;
+    }
+  }
+
   await StaffCredential.updateOne(
     { username },
     {
       $setOnInsert: {
         username,
-        passwordHash: await hashPassword(password),
+        passwordHash,
         fullName: account.fullName,
         role: account.role,
         ...(account.loc === undefined ? {} : { loc: account.loc }),
