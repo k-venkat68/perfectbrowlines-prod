@@ -215,7 +215,7 @@ function dayStr(d?: Date): string {
 
 const today = dayStr();
 
-let memorySettings: typeof DEFAULT_SETTINGS & { services: IShopService[] } = { ...DEFAULT_SETTINGS };
+let memorySettings: Omit<IShopSettingDoc, 'id'> = { ...DEFAULT_SETTINGS };
 
 // Pure empty store — Zero synthetic visits; only authentic records from MongoDB
 let memoryVisits: IVisitDoc[] = [];
