@@ -105,7 +105,13 @@ export interface IShopSettingDoc {
   locations: string[];
   currency: string;
   staff: string[];
-  services: Array<{ n: string; p: number }>;
+  services: IShopService[];
+}
+
+interface IShopService {
+  n: string;
+  p: number;
+  locationPrices?: Record<string, number>;
 }
 
 const ShopSettingSchema = new mongoose.Schema({
@@ -115,7 +121,8 @@ const ShopSettingSchema = new mongoose.Schema({
   staff: [{ type: String }],
   services: [{
     n: { type: String, required: true },
-    p: { type: Number, required: true }
+    p: { type: Number, required: true },
+    locationPrices: { type: mongoose.Schema.Types.Mixed, default: {} }
   }]
 }, { timestamps: true, collection: 'shopsettings' });
 
@@ -125,6 +132,7 @@ interface IStaffCredential {
   fullName: string;
   role: 'SUPER_ADMIN' | 'LOCATION_OPERATOR';
   loc?: number;
+  monthlySalary: number;
   isActive: boolean;
 }
 
@@ -134,6 +142,7 @@ const StaffCredentialSchema = new mongoose.Schema<IStaffCredential>({
   fullName: { type: String, required: true },
   role: { type: String, enum: ['SUPER_ADMIN', 'LOCATION_OPERATOR'], required: true },
   loc: { type: Number, min: 0, max: 1 },
+  monthlySalary: { type: Number, min: 0, default: 0 },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true, collection: 'staffcredentials' });
 
@@ -204,7 +213,7 @@ function dayStr(d?: Date): string {
 
 const today = dayStr();
 
-let memorySettings = { ...DEFAULT_SETTINGS };
+let memorySettings: typeof DEFAULT_SETTINGS & { services: IShopService[] } = { ...DEFAULT_SETTINGS };
 
 // Pure empty store — Zero synthetic visits; only authentic records from MongoDB
 let memoryVisits: IVisitDoc[] = [];
@@ -328,6 +337,7 @@ async function seedStaffCredentials(): Promise<void> {
           fullName: account.fullName,
           role: account.role,
           ...(account.loc === undefined ? {} : { loc: account.loc }),
+          monthlySalary: 0,
           isActive: true
         }
       },
@@ -336,15 +346,36 @@ async function seedStaffCredentials(): Promise<void> {
   }
 }
 
-function isShopService(value: unknown): value is { n: string; p: number } {
+function isShopService(value: unknown): value is IShopService {
   if (!value || typeof value !== 'object') return false;
-  const service = value as { n?: unknown; p?: unknown };
-  return typeof service.n === 'string' &&
+  const service = value as { n?: unknown; p?: unknown; locationPrices?: unknown };
+  const validLocationPrices = service.locationPrices === undefined ||
+    (typeof service.locationPrices === 'object' &&
+      service.locationPrices !== null &&
+      !Array.isArray(service.locationPrices) &&
+      Object.entries(service.locationPrices).every(([location, price]) =>
+        (location === '0' || location === '1') &&
+        typeof price === 'number' &&
+        Number.isFinite(price) &&
+        price >= 0
+      ));
+  return validLocationPrices &&
+    typeof service.n === 'string' &&
     service.n.trim().length > 0 &&
     service.n.trim().length <= 100 &&
     typeof service.p === 'number' &&
     Number.isFinite(service.p) &&
     service.p >= 0;
+}
+
+function serviceCatalogSignature(services: IShopService[]): string {
+  return JSON.stringify(services.map(service => ({
+    n: service.n.trim(),
+    p: Math.round(service.p * 100) / 100,
+    locationPrices: Object.fromEntries(
+      Object.entries(service.locationPrices || {}).sort(([a], [b]) => a.localeCompare(b))
+    )
+  })).sort((a, b) => a.n.localeCompare(b.n)));
 }
 
 // =============================================================================
@@ -522,6 +553,73 @@ app.get('/api/v1/auth/session', (req, res) => {
   });
 });
 
+app.get('/api/v1/staff/compensation', async (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ success: false, error: 'Staff sign-in is required.' });
+  if (!isMongoReady()) {
+    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Compensation could not be loaded.' });
+  }
+
+  try {
+    const filter = session.role === 'SUPER_ADMIN'
+      ? { role: 'LOCATION_OPERATOR' as const, isActive: true }
+      : { email: session.email, role: 'LOCATION_OPERATOR' as const, isActive: true };
+    const accounts = await StaffCredential.find(filter)
+      .select('email fullName loc monthlySalary')
+      .sort({ loc: 1 })
+      .lean();
+    return res.json({
+      success: true,
+      operators: accounts.map(account => ({
+        email: account.email,
+        fullName: account.fullName,
+        loc: account.loc,
+        monthlySalary: account.monthlySalary || 0
+      }))
+    });
+  } catch (error) {
+    console.error('[MongoDB staff compensation read failed]:', error);
+    return res.status(500).json({ success: false, error: 'Could not load operator compensation.' });
+  }
+});
+
+app.put('/api/v1/staff/compensation/:email', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ success: false, error: 'Admin sign-in is required.' });
+  }
+  if (!isMongoReady()) {
+    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Compensation was not saved.' });
+  }
+
+  const email = req.params.email.trim().toLowerCase();
+  const monthlySalary = Number(req.body?.monthlySalary);
+  if (!email || !Number.isFinite(monthlySalary) || monthlySalary < 0) {
+    return res.status(400).json({ success: false, error: 'Provide a valid non-negative monthly salary.' });
+  }
+
+  try {
+    const operator = await StaffCredential.findOneAndUpdate(
+      { email, role: 'LOCATION_OPERATOR', isActive: true },
+      { $set: { monthlySalary: Math.round(monthlySalary * 100) / 100 } },
+      { new: true, runValidators: true }
+    ).select('email fullName loc monthlySalary').lean();
+    if (!operator) return res.status(404).json({ success: false, error: 'Active location operator was not found.' });
+    return res.json({
+      success: true,
+      operator: {
+        email: operator.email,
+        fullName: operator.fullName,
+        loc: operator.loc,
+        monthlySalary: operator.monthlySalary || 0
+      }
+    });
+  } catch (error) {
+    console.error('[MongoDB staff compensation save failed]:', error);
+    return res.status(500).json({ success: false, error: 'Could not save operator compensation.' });
+  }
+});
+
 app.post('/api/v1/auth/login', async (req, res) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -639,7 +737,10 @@ app.post('/api/v1/visits', async (req, res) => {
     return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Please try again; your order was not saved.' });
   }
 
-  const allowedServices = new Map(memorySettings.services.map(service => [service.n, service.p]));
+  const allowedServices = new Map(memorySettings.services.map(service => [
+    service.n,
+    service.locationPrices?.[String(selectedLocation)] ?? service.p
+  ]));
   if (services.some((service: string) => !allowedServices.has(service))) {
     return res.status(400).json({ success: false, error: 'One or more selected services are unavailable.' });
   }
@@ -796,14 +897,22 @@ app.delete('/api/v1/closings/:id', async (req, res) => {
 app.get('/api/v1/settings', async (req, res) => {
   if (isMongoReady()) {
     try {
-      const s = await ShopSetting.findOne({ id: 'shop' }).lean();
-      if (s) return res.json({ success: true, settings: s, source: 'mongodb' });
+      const [s, openOrder] = await Promise.all([
+        ShopSetting.findOne({ id: 'shop' }).lean(),
+        Visit.exists({ status: 'waiting' })
+      ]);
+      return res.json({
+        success: true,
+        settings: s || memorySettings,
+        pricingLocked: Boolean(openOrder),
+        source: 'mongodb'
+      });
     } catch (err) {
       console.warn('[MongoDB settings fetch error]:', err);
     }
   }
 
-  res.json({ success: true, settings: memorySettings, source: 'memory' });
+  res.json({ success: true, settings: memorySettings, pricingLocked: true, source: 'memory' });
 });
 
 // POST /api/v1/settings
@@ -824,7 +933,17 @@ app.post('/api/v1/settings', async (req, res) => {
   }
   const normalizedServices = services.map(service => ({
     n: service.n.trim(),
-    p: Math.round(service.p * 100) / 100
+    p: Math.round(service.p * 100) / 100,
+    ...(service.locationPrices
+      ? {
+          locationPrices: Object.fromEntries(
+            Object.entries(service.locationPrices).map(([location, price]) => [
+              location,
+              Math.round(price * 100) / 100
+            ])
+          )
+        }
+      : {})
   }));
   if (new Set(normalizedServices.map(service => service.n.toLocaleLowerCase())).size !== normalizedServices.length) {
     return res.status(400).json({ success: false, error: 'Service names must be unique.' });
@@ -836,6 +955,20 @@ app.post('/api/v1/settings', async (req, res) => {
   }
 
   try {
+    const [existingSettings, openOrder] = await Promise.all([
+      ShopSetting.findOne({ id: 'shop' }).lean(),
+      Visit.exists({ status: 'waiting' })
+    ]);
+    const currentServices = existingSettings?.services || memorySettings.services;
+    const pricingLocked = Boolean(openOrder);
+    if (pricingLocked && serviceCatalogSignature(currentServices) !== serviceCatalogSignature(normalizedServices)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Service and price changes are locked while orders are in progress. Complete or cancel all open orders at every location, then try again.',
+        pricingLocked: true
+      });
+    }
+
     const saved = await ShopSetting.findOneAndUpdate(
       { id: 'shop' },
       { $set: { staff: normalizedStaff, services: normalizedServices } },
@@ -848,7 +981,13 @@ app.post('/api/v1/settings', async (req, res) => {
       staff: saved.staff || memorySettings.staff,
       services: saved.services || memorySettings.services
     };
-    return res.json({ success: true, settings: memorySettings, source: 'mongodb' });
+    const remainingOpenOrder = await Visit.exists({ status: 'waiting' });
+    return res.json({
+      success: true,
+      settings: memorySettings,
+      pricingLocked: Boolean(remainingOpenOrder),
+      source: 'mongodb'
+    });
   } catch (err) {
     console.error('[MongoDB settings save error]:', err);
     return res.status(500).json({ success: false, error: 'Could not save shop settings.' });

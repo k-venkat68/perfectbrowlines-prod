@@ -50,7 +50,14 @@ export interface ShopSettings {
   locations: string[];
   currency: string;
   staff: string[];
-  services: Array<{ n: string; p: number }>;
+  services: Array<{ n: string; p: number; locationPrices?: Record<string, number> }>;
+}
+
+export interface OperatorCompensation {
+  email: string;
+  fullName: string;
+  loc: number;
+  monthlySalary: number;
 }
 
 export interface ServiceSnapshot {

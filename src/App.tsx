@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { VisitItem, ClosingRecord, ShopSettings, SalonUser } from './types';
+import { VisitItem, ClosingRecord, ShopSettings, SalonUser, OperatorCompensation } from './types';
 import { salonApi } from './api/salonApi';
 import { StaffLoginModal } from './components/StaffLoginModal';
 import {
@@ -46,6 +46,14 @@ function longDay(s: string): string {
   return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+function monthsTouched(from: string, to: string): number {
+  if (!from || !to || from > to) return 0;
+  const [fromYear, fromMonth] = from.slice(0, 7).split('-').map(Number);
+  const [toYear, toMonth] = to.slice(0, 7).split('-').map(Number);
+  if (![fromYear, fromMonth, toYear, toMonth].every(Number.isFinite)) return 0;
+  return (toYear - fromYear) * 12 + toMonth - fromMonth + 1;
+}
+
 function waitMin(ts: number): number {
   return Math.max(0, Math.round((Date.now() - ts) / 60000));
 }
@@ -85,6 +93,7 @@ export default function App() {
       { n: 'Ombré Microblading', p: 350 }
     ]
   });
+  const [pricingLocked, setPricingLocked] = useState(true);
 
   // Data states
   const today = useMemo(() => dayStr(), []);
@@ -97,6 +106,8 @@ export default function App() {
   const [customFrom, setCustomFrom] = useState(`${today.slice(0, 7)}-01`);
   const [customTo, setCustomTo] = useState(today);
   const [closings, setClosings] = useState<ClosingRecord[]>([]);
+  const [operatorCompensation, setOperatorCompensation] = useState<OperatorCompensation[]>([]);
+  const [salaryDrafts, setSalaryDrafts] = useState<Record<string, string>>({});
 
   // Check-in Form state
   const [ciName, setCiName] = useState<string>('');
@@ -122,7 +133,15 @@ export default function App() {
   const [serviceNameDraft, setServiceNameDraft] = useState('');
   const [servicePriceDraft, setServicePriceDraft] = useState('');
   const [servicePriceDrafts, setServicePriceDrafts] = useState<Record<string, string>>({});
+  const [servicePriceLocation, setServicePriceLocation] = useState(0);
   const [deletingServiceName, setDeletingServiceName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pricingLocked) {
+      setServicePriceDrafts({});
+      setDeletingServiceName(null);
+    }
+  }, [pricingLocked]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -152,6 +171,8 @@ export default function App() {
   };
 
   const locName = (i: number): string => settings.locations[i] || (i === 1 ? 'Jackson' : 'Battle Creek');
+  const servicePrice = (service: ShopSettings['services'][number], location: number): number =>
+    service.locationPrices?.[String(location)] ?? service.p;
 
   // Load initial data & connect with MongoDB
   const loadData = async () => {
@@ -162,8 +183,11 @@ export default function App() {
 
       const s = await salonApi.fetchSettings();
       if (s) {
-        setSettings(s);
-        setStaffText(s.staff.join('\n'));
+        setSettings(s.settings);
+        setPricingLocked(s.pricingLocked);
+        setStaffText(s.settings.staff.join('\n'));
+      } else {
+        setPricingLocked(true);
       }
 
       if (currentUser) {
@@ -202,6 +226,27 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    if (!currentUser) {
+      setOperatorCompensation([]);
+      setSalaryDrafts({});
+      return;
+    }
+
+    salonApi.fetchOperatorCompensation().then(operators => {
+      if (!active) return;
+      if (!operators) {
+        showToast('Could not load operator compensation. Please refresh and try again.');
+        return;
+      }
+      setOperatorCompensation(operators);
+    });
+    return () => {
+      active = false;
+    };
+  }, [currentUser]);
+
   const analyticsDateRange = useMemo(() => {
     switch (analyticsPeriod) {
       case 'today':
@@ -219,7 +264,7 @@ export default function App() {
   }, [analyticsPeriod, customFrom, customTo, today]);
 
   useEffect(() => {
-    if (currentUser?.role !== 'SUPER_ADMIN' || analyticsDateRange.from > analyticsDateRange.to) {
+    if (!currentUser || analyticsDateRange.from > analyticsDateRange.to) {
       setAnalyticsVisits([]);
       return;
     }
@@ -470,12 +515,14 @@ export default function App() {
   };
 
   const persistSettings = async (updated: ShopSettings): Promise<boolean> => {
-    const saved = await salonApi.saveSettings(updated);
-    if (!saved) {
-      showToast('Could not save settings. Check the server and MongoDB, then try again.');
+    const result = await salonApi.saveSettings(updated);
+    if (!result.success) {
+      setPricingLocked(true);
+      showToast(result.error || 'Could not save settings. Check the server and MongoDB, then try again.');
       return false;
     }
     setSettings(updated);
+    setPricingLocked(result.pricingLocked ?? false);
     return true;
   };
 
@@ -492,8 +539,37 @@ export default function App() {
     if (await persistSettings(updated)) showToast('Staff settings saved successfully.');
   };
 
+  const handleSaveOperatorSalary = async (operator: OperatorCompensation) => {
+    const draft = salaryDrafts[operator.email];
+    if (draft === undefined) return;
+    const monthlySalary = Number(draft);
+    if (!draft.trim() || !Number.isFinite(monthlySalary) || monthlySalary < 0) {
+      showToast('Enter a valid non-negative monthly salary.');
+      return;
+    }
+
+    const updated = await salonApi.saveOperatorSalary(operator.email, monthlySalary);
+    if (!updated) {
+      showToast(`Could not save salary for ${operator.fullName}.`);
+      return;
+    }
+    setOperatorCompensation(current => current.map(item =>
+      item.email === updated.email ? updated : item
+    ));
+    setSalaryDrafts(current => {
+      const next = { ...current };
+      delete next[operator.email];
+      return next;
+    });
+    showToast(`Monthly salary saved for ${operator.fullName}.`);
+  };
+
   const handleSaveService = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (pricingLocked) {
+      showToast('Complete or cancel all open orders before changing services or prices.');
+      return;
+    }
     const name = serviceNameDraft.trim();
     const price = Number(servicePriceDraft);
     if (!name || !Number.isFinite(price) || price < 0) {
@@ -516,7 +592,12 @@ export default function App() {
   };
 
   const handleSaveServicePrice = async (name: string) => {
-    const draft = servicePriceDrafts[name];
+    if (pricingLocked) {
+      showToast('Complete or cancel all open orders before changing service prices.');
+      return;
+    }
+    const draftKey = `${servicePriceLocation}:${name}`;
+    const draft = servicePriceDrafts[draftKey];
     if (draft === undefined) return;
     const price = Number(draft);
     if (!draft.trim() || !Number.isFinite(price) || price < 0) {
@@ -525,20 +606,57 @@ export default function App() {
     }
 
     const services = settings.services.map(service =>
-      service.n === name ? { ...service, p: Math.round(price * 100) / 100 } : service
+      service.n === name
+        ? {
+            ...service,
+            locationPrices: {
+              ...service.locationPrices,
+              [String(servicePriceLocation)]: Math.round(price * 100) / 100
+            }
+          }
+        : service
     );
     if (await persistSettings({ ...settings, services })) {
       setServicePriceDrafts(current => {
         const next = { ...current };
-        delete next[name];
+        delete next[draftKey];
         return next;
       });
       setDeletingServiceName(null);
-      showToast(`${name} price saved.`);
+      showToast(`${name} price saved for ${locName(servicePriceLocation)}.`);
+    }
+  };
+
+  const handleResetServicePrice = async (name: string) => {
+    if (pricingLocked) {
+      showToast('Complete or cancel all open orders before changing service prices.');
+      return;
+    }
+    const service = settings.services.find(item => item.n === name);
+    if (service?.locationPrices?.[String(servicePriceLocation)] === undefined) return;
+
+    const locationPrices = { ...service.locationPrices };
+    delete locationPrices[String(servicePriceLocation)];
+    const services = settings.services.map(item =>
+      item.n === name
+        ? { ...item, locationPrices }
+        : item
+    );
+    if (await persistSettings({ ...settings, services })) {
+      setServicePriceDrafts(current => {
+        const next = { ...current };
+        delete next[`${servicePriceLocation}:${name}`];
+        return next;
+      });
+      showToast(`${name} now uses the shared default at ${locName(servicePriceLocation)}.`);
     }
   };
 
   const handleDeleteService = async (name: string) => {
+    if (pricingLocked) {
+      showToast('Complete or cancel all open orders before changing services or prices.');
+      return;
+    }
     if (settings.services.length <= 1) {
       showToast('Keep at least one service available.');
       return;
@@ -550,9 +668,9 @@ export default function App() {
     const services = settings.services.filter(service => service.n !== name);
     if (await persistSettings({ ...settings, services })) {
       setServicePriceDrafts(current => {
-        const next = { ...current };
-        delete next[name];
-        return next;
+        return Object.fromEntries(
+          Object.entries(current).filter(([key]) => !key.endsWith(`:${name}`))
+        );
       });
       setCiSel(selected => {
         const next = { ...selected };
@@ -647,6 +765,58 @@ export default function App() {
     () => Object.entries(analyticsStats.by).sort(([, a], [, b]) => b.sales - a.sales),
     [analyticsStats]
   );
+  const operatorAnalyticsVisits = useMemo(
+    () => analyticsVisits.filter(visit => visit.loc === loc && visit.employee === currentUser?.fullName),
+    [analyticsVisits, currentUser?.fullName, loc]
+  );
+  const operatorAnalyticsStats = useMemo(() => computeStats(operatorAnalyticsVisits), [operatorAnalyticsVisits]);
+  const currentOperatorCompensation = operatorCompensation.find(operator => operator.email === currentUser?.email);
+  const operatorSalaryAllocation = currentOperatorCompensation
+    ? currentOperatorCompensation.monthlySalary * monthsTouched(analyticsDateRange.from, analyticsDateRange.to)
+    : null;
+  const adminOperatorStats = useMemo(
+    () => operatorCompensation.map(operator => {
+      const operatorVisits = analyticsVisits.filter(
+        visit => visit.loc === operator.loc && visit.employee === operator.fullName
+      );
+      const stats = computeStats(operatorVisits);
+      return {
+        ...operator,
+        ...stats,
+        salaryExpense: operator.monthlySalary * monthsTouched(analyticsDateRange.from, analyticsDateRange.to),
+        profitAfterSalary: stats.sales - operator.monthlySalary * monthsTouched(analyticsDateRange.from, analyticsDateRange.to)
+      };
+    }),
+    [analyticsVisits, analyticsDateRange, operatorCompensation]
+  );
+  const selectedAdminOperators = useMemo(
+    () => adminOperatorStats.filter(operator =>
+      analyticsLocation === 'all' || operator.loc === Number(analyticsLocation)
+    ),
+    [adminOperatorStats, analyticsLocation]
+  );
+  const analyticsSalaryExpense = useMemo(
+    () => selectedAdminOperators.reduce((total, operator) => total + operator.salaryExpense, 0),
+    [selectedAdminOperators]
+  );
+  const analyticsProfitAfterSalary = analyticsStats.sales - analyticsSalaryExpense;
+  const overviewPnl = useMemo(() => {
+    const from = addDays(today, -6);
+    const completedVisits = weekVisits.filter(visit => visit.status === 'done');
+    const grossSales = completedVisits.reduce((total, visit) => total + (Number(visit.amount) || 0), 0);
+    const salaryExpense = operatorCompensation.reduce(
+      (total, operator) => total + operator.monthlySalary * monthsTouched(from, today),
+      0
+    );
+    const operatingCostEstimate = Math.round(grossSales * 0.15 * 100) / 100;
+    return {
+      grossSales,
+      completedCount: completedVisits.length,
+      salaryExpense,
+      profitAfterSalary: grossSales - salaryExpense,
+      operatingCostEstimate
+    };
+  }, [operatorCompensation, today, weekVisits]);
   const adminTabs = [
     { id: 'owner', label: 'Overview', Icon: TrendingUp },
     { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
@@ -656,7 +826,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F2F4F6] text-[#16202A] font-sans antialiased pb-20 selection:bg-[#B3315A]/20">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 pt-5 space-y-4">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 space-y-4">
         {/* TOP HEADER & STUDIO SWITCHER */}
         <header className="flex flex-wrap items-center justify-between gap-3 bg-white border border-[#D9DFE5] rounded-xl p-4 sm:p-5 shadow-xs">
           <div>
@@ -744,6 +914,21 @@ export default function App() {
                   {waitingCount}
                 </span>
               )}
+            </button>}
+            {currentUser?.role === 'LOCATION_OPERATOR' && <button
+              type="button"
+              onClick={() => {
+                setTab('analytics');
+                setOpenVisitId(null);
+              }}
+              className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
+                tab === 'analytics'
+                  ? 'bg-[#B3315A] text-white shadow-xs'
+                  : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
+              }`}
+            >
+              <BarChart3 className={`w-4 h-4 ${tab === 'analytics' ? 'text-white' : 'text-[#C5A880]'}`} />
+              <span>Analytics</span>
             </button>}
             {currentUser?.role === 'SUPER_ADMIN' && adminTabs.map(({ id, label, Icon }) => (
               <button
@@ -838,7 +1023,7 @@ export default function App() {
                         >
                           <span>{s.n}</span>
                           <span className={`text-xs font-mono ${isSelected ? 'text-white/95 font-bold' : 'text-[#5B6875]'}`}>
-                            {money(s.p)}
+                            {money(servicePrice(s, loc))}
                           </span>
                         </button>
                       );
@@ -849,7 +1034,7 @@ export default function App() {
                 <div className="flex items-center justify-between border-t border-[#D9DFE5] pt-3 text-sm">
                   <span className="font-semibold text-[#5B6875]">Order total</span>
                   <span className="font-bold text-[#16202A]">
-                    {money(settings.services.filter(service => ciSel[service.n]).reduce((total, service) => total + service.p, 0))}
+                    {money(settings.services.filter(service => ciSel[service.n]).reduce((total, service) => total + servicePrice(service, loc), 0))}
                   </span>
                 </div>
 
@@ -1161,6 +1346,169 @@ export default function App() {
           </div>
         )}
 
+        {tab === 'analytics' && currentUser?.role === 'LOCATION_OPERATOR' && (
+          <div className="space-y-5">
+            <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-widest text-[#B3315A] font-bold">My performance</p>
+                <h2 className="text-2xl font-bold font-serif text-[#16202A] mt-1">
+                  {currentUser.fullName} · {locName(loc)}
+                </h2>
+                <p className="text-xs text-[#5B6875] mt-1">
+                  {analyticsDateRange.label} · Tips are based on your completed visits.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  { value: 'today', label: 'Today' },
+                  { value: 'last7', label: 'Last 7 days' },
+                  { value: 'last30', label: 'Last 30 days' },
+                  { value: 'month', label: 'Month to date' },
+                  { value: 'custom', label: 'Custom range' }
+                ] as const).map(preset => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    aria-pressed={analyticsPeriod === preset.value}
+                    onClick={() => setAnalyticsPeriod(preset.value)}
+                    className={`px-3 py-2 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
+                      analyticsPeriod === preset.value
+                        ? 'bg-[#B3315A] text-white border-[#B3315A]'
+                        : 'bg-white text-[#5B6875] border-[#D9DFE5] hover:border-[#B3315A]/50'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              {analyticsPeriod === 'custom' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+                  <div>
+                    <label htmlFor="operator-analytics-from" className="block text-xs font-bold text-[#5B6875] mb-1">From</label>
+                    <input
+                      id="operator-analytics-from"
+                      type="date"
+                      value={customFrom}
+                      max={today}
+                      onChange={event => setCustomFrom(event.target.value)}
+                      className="w-full px-3 py-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="operator-analytics-to" className="block text-xs font-bold text-[#5B6875] mb-1">To</label>
+                    <input
+                      id="operator-analytics-to"
+                      type="date"
+                      value={customTo}
+                      max={today}
+                      onChange={event => setCustomTo(event.target.value)}
+                      className="w-full px-3 py-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+              {analyticsPeriod === 'custom' && analyticsDateRange.from > analyticsDateRange.to && (
+                <p role="alert" className="text-xs font-semibold text-rose-700">
+                  The start date must be on or before the end date.
+                </p>
+              )}
+            </section>
+
+            {analyticsDateRange.from <= analyticsDateRange.to && (
+              <>
+                <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+                  {[
+                    { label: 'Completed visits', value: operatorAnalyticsStats.n, accent: 'text-[#16202A]' },
+                    { label: 'Service sales', value: money(operatorAnalyticsStats.sales), accent: 'text-[#B3315A]' },
+                    { label: 'Tips earned · selected range', value: money(operatorAnalyticsStats.tips), accent: 'text-teal-800' },
+                    { label: 'Monthly base salary', value: currentOperatorCompensation ? money(currentOperatorCompensation.monthlySalary) : 'Not set', accent: 'text-[#16202A]' },
+                    {
+                      label: 'Salary + tips · before deductions',
+                      value: operatorSalaryAllocation === null ? 'Not set' : money(operatorSalaryAllocation + operatorAnalyticsStats.tips),
+                      accent: 'text-emerald-800'
+                    }
+                  ].map(metric => (
+                    <div key={metric.label} className="bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
+                      <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
+                      <span className={`block mt-1 text-2xl font-extrabold font-mono ${metric.accent}`}>{metric.value}</span>
+                    </div>
+                  ))}
+                </section>
+                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs">
+                  <h3 className="font-bold text-base text-[#16202A]">Compensation summary</h3>
+                  <p className="text-xs text-[#5B6875] mt-1">
+                    Salary is set by your administrator. The estimate uses the full monthly salary for each calendar month touched by this range, plus tips recorded on your completed orders. It is before deductions.
+                  </p>
+                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                    <div className="p-3 bg-[#F2F4F6] rounded-lg flex justify-between gap-2">
+                      <span>Base salary allocation</span>
+                      <strong className="font-mono">{operatorSalaryAllocation === null ? 'Not set' : money(operatorSalaryAllocation)}</strong>
+                    </div>
+                    <div className="p-3 bg-[#F2F4F6] rounded-lg flex justify-between gap-2">
+                      <span>Tips from completed orders</span>
+                      <strong className="font-mono">{money(operatorAnalyticsStats.tips)}</strong>
+                    </div>
+                    <div className="p-3 bg-emerald-50 rounded-lg flex justify-between gap-2 sm:col-span-2">
+                      <span className="font-semibold">Estimated salary + tips before deductions</span>
+                      <strong className="font-mono text-emerald-800">
+                        {operatorSalaryAllocation === null ? 'Not set' : money(operatorSalaryAllocation + operatorAnalyticsStats.tips)}
+                      </strong>
+                    </div>
+                  </div>
+                </section>
+                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
+                  <div>
+                    <h3 className="font-bold text-base text-[#16202A]">Orders you completed</h3>
+                    <p className="text-xs text-[#5B6875] mt-1">
+                      Completed orders checked out under your operator account during {analyticsDateRange.label.toLowerCase()}. Tips are included in the compensation totals above.
+                    </p>
+                  </div>
+                  {operatorAnalyticsVisits.filter(visit => visit.status === 'done').length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-[#D9DFE5] p-6 text-center text-sm text-[#5B6875]">
+                      No completed orders in this date range.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[720px] text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
+                            <th className="py-2 pr-3">Date &amp; time</th>
+                            <th className="py-2 px-2">Services</th>
+                            <th className="py-2 px-2 text-right">Service total</th>
+                            <th className="py-2 px-2 text-right">Tip</th>
+                            <th className="py-2 px-2 text-right">Payment</th>
+                            <th className="py-2 pl-2 text-right">Collected total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E9EDF1]">
+                          {operatorAnalyticsVisits
+                            .filter(visit => visit.status === 'done')
+                            .sort((a, b) => b.ts - a.ts)
+                            .map(visit => (
+                              <tr key={visit.id}>
+                                <td className="py-3 pr-3 whitespace-nowrap">
+                                  <span className="font-semibold text-[#16202A]">{visit.date}</span>
+                                  <span className="block text-[10px] text-[#7A8692]">{clock(visit.ts)}</span>
+                                </td>
+                                <td className="py-3 px-2 text-[#5B6875]">{visit.services.join(', ')}</td>
+                                <td className="py-3 px-2 text-right font-mono">{money(visit.amount)}</td>
+                                <td className="py-3 px-2 text-right font-mono text-teal-800">{money(visit.tip)}</td>
+                                <td className="py-3 px-2 text-right capitalize text-[#5B6875]">{visit.pay || '—'}</td>
+                                <td className="py-3 pl-2 text-right font-mono font-semibold text-[#16202A]">
+                                  {money(visit.amount + visit.tip)}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+          </div>
+        )}
+
         {/* =================================================================== */}
         {/* VIEW 3: ADMIN ANALYTICS */}
         {/* =================================================================== */}
@@ -1256,20 +1604,25 @@ export default function App() {
 
             {analyticsDateRange.from <= analyticsDateRange.to && (
               <>
-                <section className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+                <section className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-3">
                   {[
                     { label: 'Total visits', value: analyticsScopedVisits.length, accent: 'text-[#16202A]' },
                     { label: 'Clients served', value: analyticsStats.n, accent: 'text-[#16202A]' },
                     { label: 'Service sales', value: money(analyticsStats.sales), accent: 'text-[#B3315A]' },
                     { label: 'Tips collected', value: money(analyticsStats.tips), accent: 'text-teal-800' },
-                    { label: 'Still waiting', value: analyticsStats.waiting, accent: 'text-amber-700' }
+                    { label: 'Still waiting', value: analyticsStats.waiting, accent: 'text-amber-700' },
+                    { label: 'Base salary deducted', value: money(analyticsSalaryExpense), accent: 'text-rose-700' },
+                    { label: 'Profit after salary', value: money(analyticsProfitAfterSalary), accent: analyticsProfitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800' }
                   ].map(metric => (
-                    <div key={metric.label} className="bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
+                    <div key={metric.label} className="flex min-h-24 flex-col justify-between bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
-                      <span className={`block mt-1 text-2xl font-extrabold font-mono ${metric.accent}`}>{metric.value}</span>
+                      <span className={`block mt-2 text-xl sm:text-2xl font-extrabold font-mono tabular-nums ${metric.accent}`}>{metric.value}</span>
                     </div>
                   ))}
                 </section>
+                <p className="text-[11px] text-[#7A8692] -mt-2">
+                  Payroll uses the full monthly base salary for each calendar month touched by this date range. Profit after salary excludes the separate 15% operating-cost estimate.
+                </p>
 
                 <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#D9DFE5] pb-3">
@@ -1279,16 +1632,20 @@ export default function App() {
                     </div>
                     <span className="text-[11px] font-semibold text-[#5B6875]">{analyticsDateRange.label}</span>
                   </div>
-                  {analyticsLocationStats.length === 0 || analyticsScopedVisits.length === 0 ? (
+                  {analyticsLocationStats.length === 0 ? (
                     <p className="py-6 text-center text-sm text-[#5B6875]">No visits found for this location and date range.</p>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 items-stretch gap-3">
                       {analyticsLocationStats.map(location => {
                         const salesShare = analyticsAllStats.sales > 0
                           ? Math.round((location.sales / analyticsAllStats.sales) * 100)
                           : 0;
+                        const salaryExpense = selectedAdminOperators
+                          .filter(operator => operator.loc === location.location)
+                          .reduce((total, operator) => total + operator.salaryExpense, 0);
+                        const profitAfterSalary = location.sales - salaryExpense;
                         return (
-                          <article key={location.location} className="rounded-xl border border-[#D9DFE5] p-4 space-y-3">
+                          <article key={location.location} className="flex h-full flex-col rounded-xl border border-[#D9DFE5] p-4 space-y-3">
                             <div className="flex items-start justify-between gap-3">
                               <div>
                                 <h4 className="font-bold text-[#16202A]">{location.name}</h4>
@@ -1308,6 +1665,8 @@ export default function App() {
                               </div>
                             </div>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[#E9EDF1] pt-3 text-xs">
+                              <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Base salary deducted</span><strong>{money(salaryExpense)}</strong></div>
+                              <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Profit after salary</span><strong className={profitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800'}>{money(profitAfterSalary)}</strong></div>
                               <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Clients served</span><strong>{location.n}</strong></div>
                               <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Waiting</span><strong>{location.waiting}</strong></div>
                               <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Tips</span><strong>{money(location.tips)}</strong></div>
@@ -1353,6 +1712,58 @@ export default function App() {
                       </table>
                     </div>
                   )}
+                </section>
+
+                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-3">
+                  <div className="border-b border-[#D9DFE5] pb-3">
+                    <h3 className="font-bold text-base text-[#16202A]">Operator compensation</h3>
+                    <p className="text-xs text-[#5B6875] mt-1">
+                      Monthly base salary is separate from tips earned during {analyticsDateRange.label.toLowerCase()}.
+                    </p>
+                  </div>
+                  {adminOperatorStats.filter(operator =>
+                    analyticsLocation === 'all' || operator.loc === Number(analyticsLocation)
+                  ).length === 0 ? (
+                    <p className="py-5 text-center text-sm text-[#5B6875]">No active location operators are configured.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[860px] text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
+                            <th className="py-2 pr-3">Operator</th>
+                            <th className="py-2 px-2">Location</th>
+                            <th className="py-2 px-2 text-right">Clients</th>
+                            <th className="py-2 px-2 text-right">Service sales</th>
+                            <th className="py-2 px-2 text-right">Tips in period</th>
+                            <th className="py-2 px-2 text-right">Base / month</th>
+                            <th className="py-2 px-2 text-right">Salary deducted</th>
+                            <th className="py-2 pl-2 text-right">Profit after salary</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E9EDF1]">
+                          {adminOperatorStats
+                            .filter(operator => analyticsLocation === 'all' || operator.loc === Number(analyticsLocation))
+                            .map(operator => (
+                              <tr key={operator.email}>
+                                <td className="py-3 pr-3 font-semibold text-[#16202A]">{operator.fullName}</td>
+                                <td className="py-3 px-2 text-[#5B6875]">{locName(operator.loc)}</td>
+                                <td className="py-3 px-2 text-right font-mono">{operator.n}</td>
+                                <td className="py-3 px-2 text-right font-mono">{money(operator.sales)}</td>
+                                <td className="py-3 px-2 text-right font-mono">{money(operator.tips)}</td>
+                                <td className="py-3 px-2 text-right font-mono">{money(operator.monthlySalary)}</td>
+                                <td className="py-3 px-2 text-right font-mono text-rose-700">−{money(operator.salaryExpense)}</td>
+                                <td className={`py-3 pl-2 text-right font-mono font-semibold ${operator.profitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                                  {money(operator.profitAfterSalary)}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-[#7A8692]">
+                    Salary deducted uses the full monthly base salary for each calendar month touched by the selected range. Set salaries in Settings → Operator salaries.
+                  </p>
                 </section>
               </>
             )}
@@ -1656,18 +2067,18 @@ export default function App() {
                 <span className="text-xs text-[#5B6875] font-mono">{longDay(today)}</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
-                <div className="p-4 bg-[#F2F4F6] rounded-lg">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
                   <span className="text-[10px] uppercase tracking-wider text-[#5B6875] font-bold block">Clients Served</span>
-                  <span className="text-3xl font-extrabold text-[#16202A] font-mono">{todayAllStats.n}</span>
+                  <span className="text-3xl font-extrabold text-[#16202A] font-mono tabular-nums">{todayAllStats.n}</span>
                 </div>
-                <div className="p-4 bg-[#F2F4F6] rounded-lg">
+                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
                   <span className="text-[10px] uppercase tracking-wider text-[#5B6875] font-bold block">Total Sales</span>
-                  <span className="text-3xl font-extrabold text-[#B3315A] font-mono">{money(todayAllStats.sales)}</span>
+                  <span className="text-3xl font-extrabold text-[#B3315A] font-mono tabular-nums">{money(todayAllStats.sales)}</span>
                 </div>
-                <div className="p-4 bg-[#F2F4F6] rounded-lg">
+                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
                   <span className="text-[10px] uppercase tracking-wider text-[#5B6875] font-bold block">Specialist Tips</span>
-                  <span className="text-3xl font-extrabold text-teal-800 font-mono">{money(todayAllStats.tips)}</span>
+                  <span className="text-3xl font-extrabold text-teal-800 font-mono tabular-nums">{money(todayAllStats.tips)}</span>
                 </div>
               </div>
             </section>
@@ -1831,54 +2242,56 @@ export default function App() {
               </div>
             </section>
 
-            {/* P&L REAL OPERATING PROFITS & EXPENSES (CALCULATED FROM MONGODB) */}
+            {/* Weekly profit view with monthly base salaries charged for each month touched. */}
             <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-[#D9DFE5] pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#D9DFE5] pb-3">
                 <div>
-                  <h3 className="font-bold text-base text-[#16202A]">Consolidated P&amp;L &amp; Operating Margins</h3>
-                  <p className="text-xs text-[#5B6875]">Calculated from actual tickets recorded in MongoDB</p>
+                  <h3 className="font-bold text-base text-[#16202A]">Weekly profit &amp; payroll</h3>
+                  <p className="text-xs text-[#5B6875] mt-1">
+                    Completed service sales minus base salaries. Tips are excluded from business revenue.
+                  </p>
                 </div>
                 <span className={`text-xs font-bold px-2 py-1 rounded border ${
-                  weekVisits.filter(v => v.status === 'done').reduce((a, v) => a + (v.amount || 0), 0) > 0
+                  overviewPnl.grossSales > 0
                     ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
                     : 'text-[#5B6875] bg-[#F2F4F6] border-[#D9DFE5]'
                 }`}>
-                  {weekVisits.filter(v => v.status === 'done').reduce((a, v) => a + (v.amount || 0), 0) > 0
-                    ? `${Math.round(((weekVisits.filter(v => v.status === 'done').reduce((a, v) => a + (v.amount || 0), 0) - (weekVisits.filter(v => v.status === 'done').reduce((a, v) => a + (v.amount || 0), 0) * 0.15)) / weekVisits.filter(v => v.status === 'done').reduce((a, v) => a + (v.amount || 0), 0)) * 1000) / 10}% Net Margin`
-                    : '0.0% Net Margin'}
+                  {overviewPnl.grossSales > 0
+                    ? `${((overviewPnl.profitAfterSalary / overviewPnl.grossSales) * 100).toFixed(1)}% after-payroll margin`
+                    : 'No sales this week'}
                 </span>
               </div>
 
-              {(() => {
-                const doneVisits = weekVisits.filter(v => v.status === 'done');
-                const gross = doneVisits.reduce((acc, v) => acc + (v.amount || 0), 0);
-                const cardFeesAndSupplies = Math.round((gross * 0.15) * 100) / 100;
-                const netReal = Math.round((gross - cardFeesAndSupplies) * 100) / 100;
-
-                return (
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="p-4 bg-[#F2F4F6] rounded-lg">
-                      <span className="text-[10px] uppercase font-bold text-[#5B6875] block">Gross Service Turnover</span>
-                      <span className="text-2xl font-bold font-mono text-[#16202A]">{money(gross)}</span>
-                      <span className="text-[10px] text-[#5B6875] block mt-0.5">{doneVisits.length} billed treatments in MongoDB</span>
-                    </div>
-                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-lg">
-                      <span className="text-[10px] uppercase font-bold text-rose-800 block">Total Operational Direct Costs</span>
-                      <span className="text-2xl font-bold font-mono text-rose-800">
-                        {cardFeesAndSupplies > 0 ? `-${money(cardFeesAndSupplies)}` : money(0)}
-                      </span>
-                      <span className="text-[10px] text-rose-700 block mt-0.5">Card processing &amp; disposable supplies (15%)</span>
-                    </div>
-                    <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-lg">
-                      <span className="text-[10px] uppercase font-bold text-emerald-800 block">Net Real Profit</span>
-                      <span className="text-2xl font-bold font-mono text-emerald-800">
-                        {netReal > 0 ? `+${money(netReal)}` : money(0)}
-                      </span>
-                      <span className="text-[10px] text-emerald-700 block mt-0.5">100% Tips passed directly to artists</span>
-                    </div>
-                  </div>
-                );
-              })()}
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
+                  <span className="text-[10px] uppercase font-bold text-[#5B6875]">Gross service sales · last 7 days</span>
+                  <span className="text-2xl font-bold font-mono tabular-nums text-[#16202A]">{money(overviewPnl.grossSales)}</span>
+                  <span className="text-[10px] text-[#5B6875]">{overviewPnl.completedCount} completed treatments</span>
+                </div>
+                <div className="flex min-h-28 flex-col justify-between p-4 bg-rose-50 border border-rose-100 rounded-lg">
+                  <span className="text-[10px] uppercase font-bold text-rose-800">Base salary deducted</span>
+                  <span className="text-2xl font-bold font-mono tabular-nums text-rose-800">−{money(overviewPnl.salaryExpense)}</span>
+                  <span className="text-[10px] text-rose-700">Full monthly salary for each calendar month touched</span>
+                </div>
+                <div className={`flex min-h-28 flex-col justify-between p-4 rounded-lg border ${
+                  overviewPnl.profitAfterSalary < 0
+                    ? 'bg-rose-50 border-rose-100'
+                    : 'bg-emerald-50 border-emerald-100'
+                }`}>
+                  <span className={`text-[10px] uppercase font-bold ${
+                    overviewPnl.profitAfterSalary < 0 ? 'text-rose-800' : 'text-emerald-800'
+                  }`}>Profit after salary</span>
+                  <span className={`text-2xl font-bold font-mono tabular-nums ${
+                    overviewPnl.profitAfterSalary < 0 ? 'text-rose-800' : 'text-emerald-800'
+                  }`}>{money(overviewPnl.profitAfterSalary)}</span>
+                  <span className="text-[10px] text-[#5B6875]">Before the separate operating-cost estimate</span>
+                </div>
+                <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg">
+                  <span className="text-[10px] uppercase font-bold text-[#5B6875]">Operating-cost estimate · 15%</span>
+                  <span className="text-2xl font-bold font-mono tabular-nums text-[#5B6875]">{money(overviewPnl.operatingCostEstimate)}</span>
+                  <span className="text-[10px] text-[#5B6875]">Estimate only; not deducted from profit above</span>
+                </div>
+              </div>
             </section>
 
             {/* QUALITY SLAs & NPS (CALCULATED FROM MONGODB) */}
@@ -1979,12 +2392,93 @@ export default function App() {
         )}
 
         {tab === 'settings' && currentUser?.role === 'SUPER_ADMIN' && (
+          <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
+            <div>
+              <h2 className="text-xl font-bold font-serif text-[#16202A]">Operator salaries</h2>
+              <p className="text-xs text-[#5B6875] mt-1">
+                Set the monthly base salary for each location operator. Salary details are visible only to admins and the assigned operator.
+              </p>
+            </div>
+            {operatorCompensation.length === 0 ? (
+              <p className="text-sm text-[#5B6875]">
+                No active operators are available. Configure operator login accounts and connect MongoDB to manage salaries.
+              </p>
+            ) : (
+              <div className="divide-y divide-[#E9EDF1] border-y border-[#E9EDF1]">
+                {operatorCompensation.map(operator => (
+                  <div key={operator.email} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-[#16202A]">{operator.fullName}</p>
+                      <p className="text-xs text-[#5B6875]">{locName(operator.loc)} · {operator.email}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1 text-xs text-[#5B6875]">
+                        <span>{settings.currency}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          required
+                          aria-label={`${operator.fullName} monthly salary`}
+                          value={salaryDrafts[operator.email] ?? String(operator.monthlySalary)}
+                          onChange={event => setSalaryDrafts(current => ({
+                            ...current,
+                            [operator.email]: event.target.value
+                          }))}
+                          className="w-32 p-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono text-[#16202A]"
+                        />
+                        <span>/ month</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => handleSaveOperatorSalary(operator)}
+                        disabled={
+                          salaryDrafts[operator.email] === undefined ||
+                          Number(salaryDrafts[operator.email]) === operator.monthlySalary
+                        }
+                        className="px-3 py-2 bg-[#B3315A] text-white rounded-lg text-xs font-semibold hover:bg-[#9B254A] disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed cursor-pointer"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {tab === 'settings' && currentUser?.role === 'SUPER_ADMIN' && (
           <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-5">
             <div>
               <h2 className="text-xl font-bold font-serif text-[#16202A]">Services &amp; Prices</h2>
               <p className="text-xs text-[#5B6875] mt-1">
-                Changes are saved to MongoDB and apply to new customer orders at both studios. Existing orders keep their original price.
+                Prices use the shared default until a location-specific price is saved. Changes apply to new orders at that location; existing orders keep their original price.
               </p>
+            </div>
+            {pricingLocked && (
+              <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900">
+                Service and price changes are locked while any order is in progress. Complete or cancel all open orders at every location to unlock editing.
+              </p>
+            )}
+
+            <div className="max-w-xs">
+              <label htmlFor="service-price-location" className="block text-xs font-bold text-[#5B6875] mb-1">
+                Edit prices for location
+              </label>
+              <select
+                id="service-price-location"
+                value={servicePriceLocation}
+                onChange={event => {
+                  setServicePriceLocation(Number(event.target.value));
+                  setDeletingServiceName(null);
+                }}
+                className="w-full p-2.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-semibold"
+              >
+                {settings.locations.map((name, index) => (
+                  <option key={name} value={index}>{name}</option>
+                ))}
+              </select>
             </div>
 
             <form onSubmit={handleSaveService} className="grid grid-cols-1 sm:grid-cols-[1fr_150px_auto] gap-3 items-end">
@@ -1994,6 +2488,7 @@ export default function App() {
                   id="service-name"
                   required
                   maxLength={100}
+                  disabled={pricingLocked}
                   value={serviceNameDraft}
                   onChange={event => setServiceNameDraft(event.target.value)}
                   placeholder="e.g. Eyebrow threading"
@@ -2001,13 +2496,14 @@ export default function App() {
                 />
               </div>
               <div>
-                <label htmlFor="service-price" className="block text-xs font-bold text-[#5B6875] mb-1">Price ($)</label>
+                <label htmlFor="service-price" className="block text-xs font-bold text-[#5B6875] mb-1">Default price ($)</label>
                 <input
                   id="service-price"
                   type="number"
                   required
                   min="0"
                   step="0.01"
+                  disabled={pricingLocked}
                   value={servicePriceDraft}
                   onChange={event => setServicePriceDraft(event.target.value)}
                   placeholder="0.00"
@@ -2016,7 +2512,8 @@ export default function App() {
               </div>
               <button
                 type="submit"
-                className="px-4 py-2.5 bg-[#B3315A] text-white text-xs font-bold rounded-lg cursor-pointer hover:bg-[#9B254A]"
+                disabled={pricingLocked}
+                className="px-4 py-2.5 bg-[#B3315A] text-white text-xs font-bold rounded-lg cursor-pointer hover:bg-[#9B254A] disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed"
               >
                 Add service
               </button>
@@ -2027,6 +2524,11 @@ export default function App() {
                 <div key={service.n} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div>
                     <p className="text-sm font-semibold text-[#16202A]">{service.n}</p>
+                    <p className="text-[11px] text-[#5B6875]">
+                      {service.locationPrices?.[String(servicePriceLocation)] === undefined
+                        ? `Using shared default: ${money(service.p)}`
+                        : `Custom price for ${locName(servicePriceLocation)}`}
+                    </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <label className="flex items-center gap-1 text-xs text-[#5B6875]">
@@ -2036,30 +2538,46 @@ export default function App() {
                         min="0"
                         step="0.01"
                         required
-                        aria-label={`${service.n} price`}
-                        value={servicePriceDrafts[service.n] ?? String(service.p)}
+                        disabled={pricingLocked}
+                        aria-label={`${service.n} price for ${locName(servicePriceLocation)}`}
+                        value={servicePriceDrafts[`${servicePriceLocation}:${service.n}`] ?? String(servicePrice(service, servicePriceLocation))}
                         onChange={event => {
-                          setServicePriceDrafts(current => ({ ...current, [service.n]: event.target.value }));
+                          setServicePriceDrafts(current => ({
+                            ...current,
+                            [`${servicePriceLocation}:${service.n}`]: event.target.value
+                          }));
                           setDeletingServiceName(null);
                         }}
-                        className="w-28 p-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono text-[#16202A]"
+                        className="w-28 p-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono text-[#16202A] disabled:bg-[#E9EDF1] disabled:text-[#7A8692]"
                       />
                     </label>
                     <button
                       type="button"
                       onClick={() => handleSaveServicePrice(service.n)}
                       disabled={
-                        servicePriceDrafts[service.n] === undefined ||
-                        Number(servicePriceDrafts[service.n]) === service.p
+                        pricingLocked ||
+                        servicePriceDrafts[`${servicePriceLocation}:${service.n}`] === undefined ||
+                        Number(servicePriceDrafts[`${servicePriceLocation}:${service.n}`]) === servicePrice(service, servicePriceLocation)
                       }
                       className="px-3 py-2 bg-[#B3315A] text-white rounded-lg text-xs font-semibold hover:bg-[#9B254A] disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed cursor-pointer"
                     >
                       Save
                     </button>
+                    {service.locationPrices?.[String(servicePriceLocation)] !== undefined && (
+                      <button
+                        type="button"
+                        onClick={() => handleResetServicePrice(service.n)}
+                        disabled={pricingLocked}
+                        className="px-3 py-2 border border-[#D9DFE5] text-[#5B6875] rounded-lg text-xs font-semibold hover:border-[#B3315A]/50 cursor-pointer disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed"
+                      >
+                        Use default
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleDeleteService(service.n)}
-                      className={`px-3 py-1.5 border rounded text-xs font-semibold cursor-pointer ${
+                      disabled={pricingLocked}
+                      className={`px-3 py-1.5 border rounded text-xs font-semibold cursor-pointer disabled:bg-[#E9EDF1] disabled:border-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed ${
                         deletingServiceName === service.n
                           ? 'bg-red-700 border-red-700 text-white'
                           : 'border-red-200 text-red-700 hover:bg-red-50'

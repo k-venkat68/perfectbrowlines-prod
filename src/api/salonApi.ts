@@ -1,4 +1,4 @@
-import { VisitItem, ClosingRecord, ShopSettings, SalonUser } from '../types';
+import { VisitItem, ClosingRecord, ShopSettings, SalonUser, OperatorCompensation } from '../types';
 
 export const salonApi = {
   async fetchSession(): Promise<SalonUser | null> {
@@ -8,6 +8,40 @@ export const salonApi = {
       return data.success ? data.user : null;
     } catch (err) {
       console.error('[salonApi] session check failed', err);
+      return null;
+    }
+  },
+
+  async fetchOperatorCompensation(): Promise<OperatorCompensation[] | null> {
+    try {
+      const res = await fetch('/api/v1/staff/compensation');
+      const data = await res.json();
+      if (!res.ok || !data.success || !Array.isArray(data.operators)) {
+        console.error('[salonApi] fetch operator compensation failed', data.error || res.statusText);
+        return null;
+      }
+      return data.operators;
+    } catch (err) {
+      console.error('[salonApi] fetch operator compensation failed', err);
+      return null;
+    }
+  },
+
+  async saveOperatorSalary(email: string, monthlySalary: number): Promise<OperatorCompensation | null> {
+    try {
+      const res = await fetch(`/api/v1/staff/compensation/${encodeURIComponent(email)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthlySalary })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.operator) {
+        console.error('[salonApi] save operator salary failed', data.error || res.statusText);
+        return null;
+      }
+      return data.operator;
+    } catch (err) {
+      console.error('[salonApi] save operator salary failed', err);
       return null;
     }
   },
@@ -146,17 +180,22 @@ export const salonApi = {
     }
   },
 
-  async fetchSettings(): Promise<ShopSettings | null> {
+  async fetchSettings(): Promise<{ settings: ShopSettings; pricingLocked: boolean } | null> {
     try {
       const res = await fetch('/api/v1/settings');
       const data = await res.json();
-      return data.success ? data.settings : null;
-    } catch {
+      if (!res.ok || !data.success || !data.settings) {
+        console.error('[salonApi] fetch settings failed', data.error || res.statusText);
+        return null;
+      }
+      return { settings: data.settings, pricingLocked: data.pricingLocked !== false };
+    } catch (err) {
+      console.error('[salonApi] fetch settings failed', err);
       return null;
     }
   },
 
-  async saveSettings(settings: ShopSettings): Promise<boolean> {
+  async saveSettings(settings: ShopSettings): Promise<{ success: boolean; error?: string; pricingLocked?: boolean }> {
     try {
       const res = await fetch('/api/v1/settings', {
         method: 'POST',
@@ -164,9 +203,13 @@ export const salonApi = {
         body: JSON.stringify(settings)
       });
       const data = await res.json();
-      return !!data.success;
-    } catch {
-      return false;
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || `Settings save failed (HTTP ${res.status}).`, pricingLocked: data.pricingLocked };
+      }
+      return { success: true, pricingLocked: data.pricingLocked };
+    } catch (err) {
+      console.error('[salonApi] save settings failed', err);
+      return { success: false, error: 'Could not reach the server. Settings were not saved.' };
     }
   },
 
