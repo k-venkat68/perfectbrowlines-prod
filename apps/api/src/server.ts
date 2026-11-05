@@ -370,27 +370,30 @@ function verifyPassword(password: string, storedHash: string): Promise<boolean> 
   });
 }
 
+async function seedStaffCredential(account: StaffAccountConfig): Promise<void> {
+  const username = account.username?.trim().toLowerCase();
+  const password = account.password;
+  if (!username || !password || /^(change-me|replace|placeholder)/i.test(password)) return;
+
+  await StaffCredential.updateOne(
+    { username },
+    {
+      $setOnInsert: {
+        username,
+        passwordHash: await hashPassword(password),
+        fullName: account.fullName,
+        role: account.role,
+        ...(account.loc === undefined ? {} : { loc: account.loc }),
+        isActive: true
+      }
+    },
+    { upsert: true }
+  );
+}
+
 async function seedStaffCredentials(): Promise<void> {
   for (const account of configuredStaffAccounts()) {
-    const username = account.username?.trim().toLowerCase();
-    const password = account.password;
-    if (!username || !password || /^(change-me|replace|placeholder)/i.test(password)) continue;
-    if (await StaffCredential.exists({ username })) continue;
-
-    await StaffCredential.updateOne(
-      { username },
-      {
-        $setOnInsert: {
-          username,
-          passwordHash: await hashPassword(password),
-          fullName: account.fullName,
-          role: account.role,
-          ...(account.loc === undefined ? {} : { loc: account.loc }),
-          isActive: true
-        }
-      },
-      { upsert: true }
-    );
+    await seedStaffCredential(account);
   }
 }
 
@@ -613,7 +616,14 @@ app.post('/api/v1/auth/login', async (req, res) => {
   }
 
   try {
-    const account = await StaffCredential.findOne({ username, isActive: true }).lean();
+    let account = await StaffCredential.findOne({ username, isActive: true }).lean();
+    if (!account) {
+      const configuredAccount = configuredStaffAccounts().find(item => item.username === username);
+      if (configuredAccount) {
+        await seedStaffCredential(configuredAccount);
+        account = await StaffCredential.findOne({ username, isActive: true }).lean();
+      }
+    }
     let passwordMatches = account ? await verifyPassword(password, account.passwordHash) : false;
     if (account && !passwordMatches) {
       const configuredAccount = configuredStaffAccounts().find(item => item.username === username);
