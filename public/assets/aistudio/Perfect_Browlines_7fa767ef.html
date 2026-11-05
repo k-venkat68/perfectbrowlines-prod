@@ -1,0 +1,523 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Perfect Browlines</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one counter app. Header with location switcher and tabs, then one working view at a time. Report is laid out like a till slip. */
+:root{
+  --bg:#F2F4F6; --surface:#FFFFFF; --ink:#16202A; --muted:#5B6875; --line:#D9DFE5;
+  --accent:#B3315A; --accent-ink:#FFFFFF; --soft:#F8E6EC; --teal:#0E7C7B; --tealsoft:#DDF0EF;
+  --ok:#1F7A4D; --warn:#8F5A00; --bad:#B42318; --sunk:#E9EDF1;
+  --display:"Bricolage Grotesque","Trebuchet MS",system-ui,sans-serif;
+  --body:"Figtree",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161B; --surface:#1A2128; --ink:#E8EDF1; --muted:#9AA7B3; --line:#2B353E;
+  --accent:#E57A9A; --accent-ink:#1A0E13; --soft:#2B1D24; --teal:#4CC2BE; --tealsoft:#173130;
+  --ok:#5CC48E; --warn:#E0A84A; --bad:#F08A7E; --sunk:#222B33; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161B; --surface:#1A2128; --ink:#E8EDF1; --muted:#9AA7B3; --line:#2B353E;
+  --accent:#E57A9A; --accent-ink:#1A0E13; --soft:#2B1D24; --teal:#4CC2BE; --tealsoft:#173130;
+  --ok:#5CC48E; --warn:#E0A84A; --bad:#F08A7E; --sunk:#222B33; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 40px}
+.wrap{max-width:980px;margin:0 auto}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;line-height:1.15}
+h2{font-size:1.5rem;font-weight:700}
+h3{font-size:1.05rem;font-weight:700}
+p{margin:0}
+.num{font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.muted{color:var(--muted)}
+.small{font-size:.85rem}
+.eyebrow{font-size:.74rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+/* header */
+.top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 20px;padding-block:18px 14px}
+.brand{font-family:var(--display);font-weight:800;font-size:1.55rem;letter-spacing:-.01em}
+.brand i{font-style:normal;color:var(--accent)}
+.brand{font-size:clamp(1.6rem,5vw,2.2rem);line-height:1.05}
+.tagline{font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;font-weight:600;color:var(--muted);margin-top:4px}
+.why{display:grid;gap:18px}
+.why .lede{max-width:62ch;font-size:1.02rem}
+.perks{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.perk{background:var(--bg);border-radius:10px;padding:16px;display:grid;gap:6px;align-content:start;min-width:0}
+.perk h3{font-size:1rem}
+.cmp td:first-child{font-weight:600;white-space:nowrap}
+.cmp th.t,.cmp td.t{color:var(--accent);font-weight:700}
+.cmp td{vertical-align:top}
+.twist{height:4px;border-radius:2px;background:repeating-linear-gradient(135deg,var(--accent) 0 3px,transparent 3px 6px);opacity:.75}
+.seg{display:inline-flex;background:var(--sunk);border-radius:10px;padding:3px;gap:3px;max-width:100%}
+.seg button{border:0;background:transparent;padding:8px 14px;border-radius:8px;font-weight:600;color:var(--muted);min-height:40px}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.tabs{display:flex;gap:4px;overflow-x:auto;padding-block:12px 4px}
+.tabs button{border:0;background:transparent;padding:9px 14px;border-radius:8px;font-weight:600;color:var(--muted);white-space:nowrap;display:flex;gap:8px;align-items:center;min-height:42px}
+.tabs button[aria-current="page"]{background:var(--ink);color:var(--bg)}
+.badge{background:var(--accent);color:var(--accent-ink);border-radius:99px;font-size:.75rem;padding:1px 7px;font-weight:700}
+
+main{padding-top:18px;display:grid;gap:18px}
+.banner{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 14px;font-size:.9rem}
+.banner.warn{border-color:var(--warn);color:var(--warn)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;display:grid;gap:16px;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+.row>*{min-width:0}
+label.f{display:grid;gap:5px;font-size:.85rem;font-weight:600;color:var(--muted)}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-height:44px;width:100%;color:var(--ink)}
+textarea{min-height:110px;resize:vertical}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:10px 16px;font-weight:600;min-height:44px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.ghost{background:transparent}
+.btn.danger{color:var(--bad);border-color:var(--bad);background:transparent}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.big{font-size:1.1rem;padding:14px 22px;min-height:54px}
+
+/* service chips */
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chip{border:1.5px solid var(--line);background:var(--bg);border-radius:10px;padding:12px 16px;font-weight:600;min-height:52px;display:flex;gap:10px;align-items:baseline}
+.chip small{color:var(--muted);font-weight:500}
+.chip[aria-pressed="true"]{border-color:var(--accent);background:var(--soft);box-shadow:inset 0 0 0 1px var(--accent)}
+.hello{font-size:clamp(1.6rem,4vw,2.3rem);font-weight:800}
+
+/* queue */
+.list{display:grid;gap:10px}
+.visit{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:14px 16px;display:grid;gap:12px;min-width:0}
+.visit.open{border-color:var(--accent)}
+.vhead{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between}
+.ticket{font-family:var(--mono);font-size:.85rem;background:var(--sunk);border-radius:6px;padding:2px 8px;margin-right:8px}
+.vname{font-weight:700;font-size:1.1rem}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{background:var(--sunk);border-radius:6px;padding:2px 9px;font-size:.84rem}
+.pill{border-radius:99px;padding:2px 10px;font-size:.8rem;font-weight:700}
+.pill.cash{background:var(--tealsoft);color:var(--teal)}
+.pill.credit{background:var(--soft);color:var(--accent)}
+.pill.cancelled{background:var(--sunk);color:var(--muted)}
+.billing{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end;border-top:1px dashed var(--line);padding-top:12px}
+.paytog{display:flex;gap:6px}
+.paytog button{flex:1;border:1.5px solid var(--line);background:var(--bg);border-radius:8px;padding:10px;font-weight:700;min-height:44px}
+.paytog button[aria-pressed="true"]{border-color:var(--accent);background:var(--soft)}
+.acts{display:flex;flex-wrap:wrap;gap:8px}
+
+/* till slip */
+.slip{font-family:var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:22px 22px 26px;display:grid;gap:9px;
+  background-image:linear-gradient(var(--surface),var(--surface))}
+.slip .ttl{font-family:var(--display);font-size:1.1rem;font-weight:700;text-align:center}
+.slip .hr{border-top:2px dashed var(--line);margin:4px 0}
+.slip .ln{display:flex;gap:8px;align-items:baseline}
+.slip .ln .dots{flex:1;border-bottom:2px dotted var(--line);transform:translateY(-3px);min-width:12px}
+.slip .ln.total{font-weight:700;font-size:1.12rem}
+.slip .ln.sub{color:var(--muted);font-size:.9rem;padding-left:14px}
+.cols{display:grid;grid-template-columns:minmax(0,420px) minmax(0,1fr);gap:18px;align-items:start}
+@media(max-width:760px){.cols{grid-template-columns:minmax(0,1fr)}}
+.tbl{width:100%;border-collapse:collapse;font-size:.92rem}
+.tbl th{text-align:left;font-size:.74rem;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
+.tbl td{padding:9px 8px;border-bottom:1px solid var(--line)}
+.tbl .r{text-align:right}
+.scroll{overflow-x:auto}
+.state{display:inline-block;border-radius:6px;padding:2px 9px;font-size:.8rem;font-weight:700}
+.state.open{background:var(--sunk);color:var(--warn)}
+.state.closed{background:var(--tealsoft);color:var(--ok)}
+.diff.ok{color:var(--ok)}.diff.bad{color:var(--bad)}
+
+/* owner */
+.locs{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.loc{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:18px;display:grid;gap:10px;border-top:4px solid var(--accent)}
+.loc.b{border-top-color:var(--teal)}
+.big-n{font-family:var(--display);font-weight:800;font-size:2rem;line-height:1}
+.kv{display:flex;justify-content:space-between;gap:10px}
+.chart{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:end;height:200px;padding-top:18px;border-bottom:1px solid var(--line)}
+.day{display:flex;gap:3px;align-items:flex-end;justify-content:center;height:100%}
+.bar{width:100%;max-width:26px;border-radius:4px 4px 0 0;background:var(--accent);position:relative;min-height:2px}
+.bar.b{background:var(--teal)}
+.bar span{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);font-size:.68rem;color:var(--muted);white-space:nowrap;padding-bottom:2px}
+.daylbls{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;font-size:.78rem;color:var(--muted);text-align:center;padding-top:6px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.85rem}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.empty{border:1.5px dashed var(--line);border-radius:10px;padding:26px 18px;text-align:center;color:var(--muted)}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:11px 18px;border-radius:10px;font-weight:600;z-index:20;max-width:calc(100% - 32px)}
+.toast[hidden]{display:none}
+.lockbar{display:flex;justify-content:center;padding-top:30px}
+@media(prefers-reduced-motion:no-preference){.visit,.chip,.btn{transition:border-color .15s,background .15s}}
+</style>
+
+<div class="wrap"><div id="app"></div></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+(function(){
+"use strict";
+var esc=function(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]})};
+var store={get:function(k,d){try{var v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}},set:function(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+function dayStr(d){d=d||new Date();var m=d.getMonth()+1,x=d.getDate();return d.getFullYear()+"-"+(m<10?"0":"")+m+"-"+(x<10?"0":"")+x}
+function addDays(s,n){var d=new Date(s+"T00:00:00");d.setDate(d.getDate()+n);return dayStr(d)}
+function dayLabel(s){var d=new Date(s+"T00:00:00");return d.toLocaleDateString(undefined,{weekday:"short",day:"numeric"})}
+function longDay(s){var d=new Date(s+"T00:00:00");return d.toLocaleDateString(undefined,{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+
+var DEFAULTS={locations:["Battle Creek","Jackson"],currency:"$",staff:[],
+  services:[{n:"Eyebrows",p:14},{n:"Upper lip",p:7},{n:"Chin",p:7},{n:"Forehead",p:7},{n:"Sideburns",p:8},{n:"Full face",p:40}]};
+var S={settings:DEFAULTS,usingDefaults:true,loc:+store.get("tt.loc","0")===1?1:0,tab:store.get("tt.tab","checkin"),locked:store.get("tt.locked","0")==="1",
+  today:dayStr(),visits:[],loaded:false,slow:false,err:"",db:null,noDb:false,canWrite:null,canEdit:false,
+  ci:{name:"",sel:{},note:""},drafts:{},open:null,confirm:null,busy:false,
+  reportDate:dayStr(),reportLoc:+store.get("tt.loc","0")===1?1:0,reportVisits:[],reportLoading:false,
+  week:[],weekLoaded:false,weekErr:false,closings:[],counted:{},lastEmp:store.get("tt.emp","")};
+var unsubs={};
+
+/* ---------- helpers ---------- */
+function money(n){n=Math.round((+n||0)*100)/100;return S.settings.currency+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+function locName(i){return S.settings.locations[i]||DEFAULTS.locations[i]}
+function svcPrice(name){var s=S.settings.services.filter(function(x){return x.n===name})[0];return s?s.p:0}
+function stats(vs){
+  var r={n:0,sales:0,cash:0,credit:0,tips:0,tipCash:0,tipCredit:0,waiting:0,cancelled:0,by:{}};
+  vs.forEach(function(v){
+    if(v.status==="waiting")r.waiting++;
+    else if(v.status==="cancelled")r.cancelled++;
+    else if(v.status==="done"){
+      var a=+v.amount||0,t=+v.tip||0;r.n++;r.sales+=a;r.tips+=t;
+      if(v.pay==="cash"){r.cash+=a;r.tipCash+=t}else{r.credit+=a;r.tipCredit+=t}
+      var k=v.employee||"Unassigned";var b=r.by[k]||(r.by[k]={n:0,sales:0,tips:0});b.n++;b.sales+=a;b.tips+=t;
+    }});
+  return r}
+function locVisits(vs,l){return vs.filter(function(v){return v.loc===l}).sort(function(a,b){return a.ts-b.ts})}
+function closingFor(l,d){var id=l+"_"+d;return S.closings.filter(function(c){return c.id===id})[0]||null}
+function toast(msg){var t=document.getElementById("toast");t.textContent=msg;t.hidden=false;clearTimeout(toast.t);toast.t=setTimeout(function(){t.hidden=true},3200)}
+function canWrite(){return !!S.db&&S.canWrite!==false}
+function waitMin(ts){return Math.max(0,Math.round((Date.now()-ts)/60000))}
+function clock(ts){return new Date(ts).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}
+
+/* ---------- data ---------- */
+function mapSnap(snap){return snap.docs.map(function(d){var o=d.data()||{};o.id=d.id;return o})}
+function subToday(){
+  if(unsubs.today)unsubs.today();
+  S.loaded=false;clearTimeout(subToday.t);subToday.t=setTimeout(function(){if(!S.loaded){S.slow=true;render()}},10000);
+  unsubs.today=S.db.collection("visits").where("date","==",S.today).onSnapshot(function(snap){
+    S.visits=mapSnap(snap);S.loaded=true;S.slow=false;clearTimeout(subToday.t);render()},
+    function(e){S.err="Today's customers could not be loaded ("+e.code+").";render()});
+}
+function subSettings(){
+  unsubs.settings=S.db.doc("settings/shop").onSnapshot(function(s){
+    if(s.exists){var d=s.data();S.settings={locations:(d.locations&&d.locations.length===2)?d.locations:DEFAULTS.locations,currency:d.currency||"$",
+      staff:d.staff||[],services:(d.services&&d.services.length)?d.services:DEFAULTS.services};S.usingDefaults=false}
+    else{S.settings=DEFAULTS;S.usingDefaults=true}
+    render()},function(){});
+}
+function subClosings(){
+  unsubs.closings=S.db.collection("closings").orderBy("date","desc").limit(60).onSnapshot(function(snap){S.closings=mapSnap(snap);render()},function(){});
+}
+function loadWeek(){
+  if(!S.db)return;var from=addDays(S.today,-6);
+  S.db.collection("visits").where("date",">=",from).where("date","<",S.today).get().then(function(snap){
+    S.week=mapSnap(snap);S.weekLoaded=true;S.weekErr=false;render()}).catch(function(){S.weekErr=true;S.weekLoaded=true;render()});
+}
+function loadReport(){
+  if(!S.db||S.reportDate===S.today){S.reportVisits=[];S.reportLoading=false;render();return}
+  S.reportLoading=true;render();var want=S.reportDate;
+  S.db.collection("visits").where("date","==",want).get().then(function(snap){
+    if(want!==S.reportDate)return;S.reportVisits=mapSnap(snap);S.reportLoading=false;render()}).catch(function(){S.reportLoading=false;S.err="That day could not be loaded.";render()});
+}
+function reportData(){return locVisits(S.reportDate===S.today?S.visits:S.reportVisits,S.reportLoc)}
+function write(p){S.busy=true;render();return p.then(function(){S.busy=false;render()},function(e){S.busy=false;render();toast(e&&e.code==="invalid_argument"?"You do not have permission to save. Ask the owner for Contributor access.":"Could not save. Check the connection and try again.");throw e})}
+
+/* ---------- views ---------- */
+function head(){
+  var tabs=[["checkin","Check-in"],["queue","Queue"],["report","Closing report"]];
+  if(S.canEdit){tabs.push(["owner","Owner"]);tabs.push(["settings","Settings"])}
+  var waiting=locVisits(S.visits,S.loc).filter(function(v){return v.status==="waiting"}).length;
+  var h='<header class="top"><div><div class="brand">Perfect <i>Browlines</i></div><div class="tagline">The Eyebrow Threading Spa</div></div>';
+  h+='<div class="seg" role="group" aria-label="This device is at">';
+  [0,1].forEach(function(i){h+='<button data-act="loc" data-v="'+i+'" aria-pressed="'+(S.loc===i)+'">'+esc(locName(i))+'</button>'});
+  h+='</div></header><div class="twist"></div>';
+  if(!S.locked){h+='<nav class="tabs" aria-label="Sections">';
+    tabs.forEach(function(t){h+='<button data-act="tab" data-v="'+t[0]+'"'+(S.tab===t[0]?' aria-current="page"':'')+'>'+t[1]+(t[0]==="queue"&&waiting?' <span class="badge">'+waiting+'</span>':'')+'</button>'});
+    h+='</nav>'}
+  return h}
+
+function banners(){
+  var b="";
+  if(S.noDb)b+='<div class="banner warn">Shared data is not available in this view. Open the page signed in to claude.ai to check customers in and record sales.</div>';
+  else if(S.canWrite===false)b+='<div class="banner warn">You have view-only access. Ask the owner to share this page with you as a Contributor to record customers and sales.</div>';
+  if(S.err)b+='<div class="banner warn">'+esc(S.err)+'</div>';
+  if(S.slow&&!S.loaded)b+='<div class="banner">Still connecting. Customers shown may be out of date.</div>';
+  if(S.usingDefaults&&S.db&&!S.locked&&S.tab!=="checkin")b+='<div class="banner">'+(S.canEdit?'Employee names have not been added yet. Add them in Settings so staff can pick their name when billing.':'Employee names have not been added yet. The owner can add them in Settings.')+'</div>';
+  return b}
+
+function viewCheckin(){
+  var vs=locVisits(S.visits,S.loc);var waiting=vs.filter(function(v){return v.status==="waiting"}).length;
+  var h='<section class="panel"><div><p class="eyebrow">'+esc(locName(S.loc))+'</p><h2 class="hello">Welcome. Tell us what you need.</h2></div>';
+  h+='<label class="f" for="ci-name">Your name<input id="ci-name" type="text" autocomplete="off" value="'+esc(S.ci.name)+'" data-ci="name" placeholder="First name is fine"></label>';
+  h+='<div><p class="eyebrow" style="margin-bottom:8px">Services (pick one or more)</p><div class="chips">';
+  S.settings.services.forEach(function(s,i){h+='<button class="chip" data-act="svc" data-v="'+i+'" aria-pressed="'+(!!S.ci.sel[s.n])+'">'+esc(s.n)+(s.p?' <small class="num">'+esc(money(s.p))+'</small>':'')+'</button>'});
+  h+='</div></div>';
+  h+='<label class="f" for="ci-note">Anything else we should know? (optional)<input id="ci-note" type="text" autocomplete="off" value="'+esc(S.ci.note)+'" data-ci="note" placeholder="Sensitive skin, short on time..."></label>';
+  h+='<div class="row"><button class="btn primary big" data-act="checkin"'+(canWrite()&&!S.busy?'':' disabled')+'>Check in</button>';
+  h+='<span class="muted">'+(waiting?waiting+' waiting ahead of you':'No one is waiting right now')+'</span></div></section>';
+  return h+viewWhy()}
+
+function viewWhy(){
+  var rows=[
+    ["What touches your skin","Cotton thread only","Heated wax or resin, sometimes with added oils or fragrance"],
+    ["Heat","None","Warm wax, with a burn risk if it is too hot"],
+    ["Pulls on the skin","Very little. The thread works on the hair","Wax grips the skin as well as the hair"],
+    ["Short and fine hairs","Removed along with the rest","Hair must be long enough for the wax to grip"],
+    ["Shaping","Line by line, for a clean arch","Harder to control on small areas"],
+    ["Results last","About 3 to 6 weeks","About 3 to 6 weeks"],
+    ["Sensitive skin","Usually the gentler choice","More likely to cause redness or lifting"]];
+  var h='<section class="panel why" aria-labelledby="why-h"><div><p class="eyebrow">Why threading</p><h2 id="why-h">Threading vs waxing</h2></div>';
+  h+='<p class="lede">Threading uses a single twisted cotton thread to lift hair out at the root. There is no wax, no resin and no heat, so nothing sticky or chemical goes on your skin.</p>';
+  h+='<div class="perks"><div class="perk"><h3>A natural process</h3><p class="muted">Just cotton thread and a skilled hand. Nothing is added to your skin, which suits anyone who prefers to keep products and chemicals away from it.</p></div>';
+  h+='<div class="perk"><h3>Gentler on sensitive skin</h3><p class="muted">Wax sticks to skin and pulls it with the hair. Thread works on the hair alone, so skin is less likely to redden, lift or react.</p></div>';
+  h+='<div class="perk"><h3>Precise shaping</h3><p class="muted">Each hair is removed on its own, including fine and short ones, so your threader can draw a clean, defined brow line.</p></div></div>';
+  h+='<div class="scroll"><table class="tbl cmp"><thead><tr><th></th><th class="t">Threading</th><th>Waxing</th></tr></thead><tbody>';
+  rows.forEach(function(r){h+='<tr><td>'+esc(r[0])+'</td><td class="t">'+esc(r[1])+'</td><td>'+esc(r[2])+'</td></tr>'});
+  h+='</tbody></table></div><p class="muted small">Any hair removal can leave mild redness for a few hours. Tell your threader about skin conditions or treatments such as retinoids or acne medication before you start.</p></section>';
+  return h}
+
+function viewQueue(){
+  var vs=locVisits(S.visits,S.loc);var order={};vs.forEach(function(v,i){order[v.id]=i+1});
+  var waiting=vs.filter(function(v){return v.status==="waiting"});
+  var done=vs.filter(function(v){return v.status!=="waiting"}).reverse();
+  var h='<section class="panel"><div class="vhead"><h2>Waiting at '+esc(locName(S.loc))+'</h2><span class="muted">'+waiting.length+' waiting</span></div>';
+  if(!S.loaded&&S.db)h+='<div class="empty">Loading today\'s customers...</div>';
+  else if(!waiting.length)h+='<div class="empty">No one is waiting. New check-ins appear here as soon as they are submitted.</div>';
+  else{h+='<div class="list">';waiting.forEach(function(v){h+=visitCard(v,order[v.id])});h+='</div>'}
+  h+='</section>';
+  h+='<section class="panel"><div class="vhead"><h3>Served today</h3><span class="muted">'+done.length+'</span></div>';
+  if(!done.length)h+='<div class="empty">Finished customers are listed here with what was charged.</div>';
+  else{h+='<div class="list">';done.forEach(function(v){h+=visitCard(v,order[v.id])});h+='</div>'}
+  return h+'</section>'}
+
+function visitCard(v,no){
+  var open=S.open===v.id;
+  var h='<article class="visit'+(open?' open':'')+'"><div class="vhead"><div><span class="ticket">#'+no+'</span><span class="vname">'+esc(v.name)+'</span></div>';
+  if(v.status==="waiting")h+='<span class="muted small num">Checked in '+esc(clock(v.ts))+' &middot; waiting <span data-wait="'+v.ts+'">'+waitMin(v.ts)+'</span> min</span>';
+  else if(v.status==="cancelled")h+='<span class="pill cancelled">Removed</span>';
+  else h+='<span><span class="pill '+(v.pay==="cash"?'cash':'credit')+'">'+(v.pay==="cash"?'Cash':'Credit')+'</span> <strong class="num">'+esc(money(v.amount))+'</strong> <span class="muted small num">+ '+esc(money(v.tip))+' tip</span></span>';
+  h+='</div><div class="tags">'+(v.services||[]).map(function(s){return '<span class="tag">'+esc(s)+'</span>'}).join("")+'</div>';
+  if(v.note)h+='<p class="muted small">Note: '+esc(v.note)+'</p>';
+  if(v.status==="done")h+='<p class="muted small">Served by '+esc(v.employee||"Unassigned")+(v.doneTs?' at '+esc(clock(v.doneTs)):'')+'</p>';
+  if(open){
+    var d=S.drafts[v.id]||{};
+    h+='<div class="billing">';
+    if(S.settings.staff.length){h+='<label class="f" for="bf-emp">Employee<select id="bf-emp" data-draft="'+v.id+'" data-f="emp"><option value="">Choose...</option>'+S.settings.staff.map(function(n){return '<option'+(d.emp===n?' selected':'')+'>'+esc(n)+'</option>'}).join("")+'</select></label>'}
+    else h+='<label class="f" for="bf-emp">Employee<input id="bf-emp" type="text" value="'+esc(d.emp||"")+'" data-draft="'+v.id+'" data-f="emp" placeholder="Your name"></label>';
+    h+='<label class="f" for="bf-amt">Amount charged<input id="bf-amt" type="number" inputmode="decimal" min="0" step="0.01" value="'+esc(d.amount==null?"":d.amount)+'" data-draft="'+v.id+'" data-f="amount"></label>';
+    h+='<div class="f">Payment<div class="paytog"><button data-act="pay" data-v="cash" aria-pressed="'+(d.pay==="cash")+'">Cash</button><button data-act="pay" data-v="credit" aria-pressed="'+(d.pay==="credit")+'">Credit</button></div></div>';
+    h+='<label class="f" for="bf-tip">Tip<input id="bf-tip" type="number" inputmode="decimal" min="0" step="0.01" value="'+esc(d.tip==null?"":d.tip)+'" data-draft="'+v.id+'" data-f="tip" placeholder="0.00"></label></div>';
+    h+='<div class="acts"><button class="btn primary" data-act="done" data-v="'+v.id+'"'+(S.busy||!canWrite()?' disabled':'')+'>Save and finish</button><button class="btn ghost" data-act="closeform">Cancel</button></div>';
+  }else{
+    h+='<div class="acts">';
+    if(v.status==="waiting"){
+      h+='<button class="btn primary" data-act="open" data-v="'+v.id+'">Serve and bill</button>';
+      h+=S.confirm===v.id?'<button class="btn danger" data-act="remove" data-v="'+v.id+'">Yes, remove</button><button class="btn ghost" data-act="noconfirm">Keep</button>':'<button class="btn ghost" data-act="askremove" data-v="'+v.id+'">Remove</button>';
+    }else if(v.status==="done")h+='<button class="btn ghost" data-act="open" data-v="'+v.id+'">Edit amounts</button>';
+    else h+='<button class="btn ghost" data-act="restore" data-v="'+v.id+'">Put back in queue</button>';
+    h+='</div>'}
+  return h+'</article>'}
+
+function slipText(l,d,st,cl){
+  var t=S.settings.currency;var L=[];L.push(locName(l)+" - "+longDay(d));
+  L.push("Customers served: "+st.n);L.push("Total sales: "+money(st.sales));L.push("Cash sales: "+money(st.cash));L.push("Credit sales: "+money(st.credit));
+  L.push("Tips: "+money(st.tips)+" (cash "+money(st.tipCash)+", credit "+money(st.tipCredit)+")");
+  Object.keys(st.by).forEach(function(k){L.push("  "+k+": "+st.by[k].n+" customers, "+money(st.by[k].sales)+", tips "+money(st.by[k].tips))});
+  if(cl&&cl.counted!=null)L.push("Cash counted: "+money(cl.counted)+" (expected "+money(st.cash+st.tipCash)+")");
+  return L.join("\n")}
+
+function ln(label,val,cls){return '<div class="ln '+(cls||"")+'"><span>'+label+'</span><span class="dots"></span><span class="num">'+val+'</span></div>'}
+
+function viewReport(){
+  var vs=reportData();var st=stats(vs);var cl=closingFor(S.reportLoc,S.reportDate);
+  var h='<section class="panel"><div class="row">';
+  h+='<label class="f" for="r-date">Date<input id="r-date" type="date" value="'+esc(S.reportDate)+'" max="'+esc(S.today)+'" data-rep="date"></label>';
+  h+='<label class="f" for="r-loc">Location<select id="r-loc" data-rep="loc">'+[0,1].map(function(i){return '<option value="'+i+'"'+(S.reportLoc===i?' selected':'')+'>'+esc(locName(i))+'</option>'}).join("")+'</select></label>';
+  h+='<span class="state '+(cl?'closed':'open')+'">'+(cl?'Day closed':'Day open')+'</span></div></section>';
+  if(S.reportLoading)return h+'<div class="empty">Loading '+esc(longDay(S.reportDate))+'...</div>';
+  h+='<div class="cols"><section class="slip" aria-label="Closing totals"><div class="ttl">'+esc(locName(S.reportLoc))+'</div><div class="small muted" style="text-align:center">'+esc(longDay(S.reportDate))+'</div><div class="hr"></div>';
+  h+=ln("Customers served",st.n);
+  h+=ln("Total sales",esc(money(st.sales)),"total");
+  h+=ln("Cash sales",esc(money(st.cash)),"sub");h+=ln("Credit sales",esc(money(st.credit)),"sub");
+  h+='<div class="hr"></div>'+ln("Tips",esc(money(st.tips)));
+  h+=ln("In cash",esc(money(st.tipCash)),"sub");h+=ln("On credit",esc(money(st.tipCredit)),"sub");
+  if(st.waiting||st.cancelled){h+='<div class="hr"></div>';if(st.waiting)h+=ln("Still waiting",st.waiting);if(st.cancelled)h+=ln("Removed from queue",st.cancelled)}
+  h+='</section><div style="display:grid;gap:18px;min-width:0"><section class="panel"><h3>By employee</h3>';
+  var keys=Object.keys(st.by);
+  if(!keys.length)h+='<div class="empty">No finished customers for this day yet.</div>';
+  else{h+='<div class="scroll"><table class="tbl"><thead><tr><th>Employee</th><th class="r">Customers</th><th class="r">Sales</th><th class="r">Tips</th></tr></thead><tbody>';
+    keys.sort().forEach(function(k){var b=st.by[k];h+='<tr><td>'+esc(k)+'</td><td class="r num">'+b.n+'</td><td class="r num">'+esc(money(b.sales))+'</td><td class="r num">'+esc(money(b.tips))+'</td></tr>'});
+    h+='</tbody></table></div>'}
+  h+='</section>';
+  var expect=st.cash+st.tipCash;
+  h+='<section class="panel"><h3>Close the day</h3>';
+  if(cl){var diff=(+cl.counted||0)-(+cl.expected||0);
+    h+='<p>Closed at '+esc(clock(cl.closedTs))+'. Totals saved: '+esc(money(cl.sales))+' from '+cl.customers+' customers.</p>';
+    if(cl.counted!=null)h+='<p class="num">Cash counted '+esc(money(cl.counted))+' against '+esc(money(cl.expected))+' expected: <strong class="diff '+(Math.abs(diff)<0.005?'ok':'bad')+'">'+(Math.abs(diff)<0.005?'matches':(diff>0?'over by ':'short by ')+esc(money(Math.abs(diff))))+'</strong></p>';
+    if(Math.abs((+cl.sales||0)-st.sales)>0.005||cl.customers!==st.n)h+='<p class="banner warn">Sales were edited after closing. Live total is '+esc(money(st.sales))+'. Reopen the day and close it again to refresh the saved totals.</p>';
+    if(S.canEdit)h+=S.confirm==="reopen"?'<div class="acts"><button class="btn danger" data-act="reopen">Yes, reopen day</button><button class="btn ghost" data-act="noconfirm">Keep closed</button></div>':'<div class="acts"><button class="btn ghost" data-act="askreopen">Reopen day</button></div>';
+  }else if(S.canEdit){
+    if(st.waiting)h+='<p class="banner warn">'+st.waiting+' customer'+(st.waiting>1?'s are':' is')+' still waiting. Finish or remove them before closing.</p>';
+    h+='<label class="f" for="r-counted">Cash counted in the drawer (optional)<input id="r-counted" type="number" inputmode="decimal" min="0" step="0.01" data-rep="counted" value="'+esc(S.counted[S.reportLoc+"_"+S.reportDate]==null?"":S.counted[S.reportLoc+"_"+S.reportDate])+'" placeholder="'+esc(money(expect))+'"></label>';
+    h+='<p class="muted small">Expected in the drawer is cash sales plus cash tips: '+esc(money(expect))+'.</p>';
+    h+='<div class="acts"><button class="btn primary" data-act="closeday"'+(S.busy?' disabled':'')+'>Close day</button></div>';
+  }else h+='<p class="muted">The owner closes the day after reviewing these totals.</p>';
+  h+='<div class="acts"><button class="btn ghost" data-act="copy">Copy summary</button></div></section></div></div>';
+  return h}
+
+function viewOwner(){
+  var days=[];for(var i=-6;i<=0;i++)days.push(addDays(S.today,i));
+  var per={};days.forEach(function(d){var vs=d===S.today?S.visits:S.week.filter(function(v){return v.date===d});per[d]=[0,1].map(function(l){return stats(vs.filter(function(v){return v.loc===l}))})});
+  var tot=[0,1].map(function(l){return per[S.today][l]});
+  var all=stats(S.visits);
+  var h='<section class="panel"><div class="vhead"><h2>Today across both locations</h2><span class="muted">'+esc(longDay(S.today))+'</span></div>';
+  h+='<div class="row" style="gap:28px"><div><p class="eyebrow">Customers</p><p class="big-n num">'+all.n+'</p></div><div><p class="eyebrow">Total sales</p><p class="big-n num">'+esc(money(all.sales))+'</p></div><div><p class="eyebrow">Tips</p><p class="big-n num">'+esc(money(all.tips))+'</p></div></div></section>';
+  h+='<div class="locs">';
+  [0,1].forEach(function(l){var s=tot[l];var cl=closingFor(l,S.today);
+    h+='<section class="loc'+(l?' b':'')+'"><div class="vhead"><h3>'+esc(locName(l))+'</h3><span class="state '+(cl?'closed':'open')+'">'+(cl?'Closed':'Open')+'</span></div>';
+    h+='<p class="big-n num">'+esc(money(s.sales))+'</p>';
+    h+='<div class="kv"><span class="muted">Customers served</span><strong class="num">'+s.n+'</strong></div><div class="kv"><span class="muted">Cash sales</span><span class="num">'+esc(money(s.cash))+'</span></div><div class="kv"><span class="muted">Credit sales</span><span class="num">'+esc(money(s.credit))+'</span></div><div class="kv"><span class="muted">Tips</span><span class="num">'+esc(money(s.tips))+'</span></div><div class="kv"><span class="muted">Waiting now</span><span class="num">'+s.waiting+'</span></div>';
+    h+='<div class="acts"><button class="btn ghost" data-act="gotoreport" data-v="'+l+'">Open report</button></div></section>'});
+  h+='</div>';
+  var max=0;days.forEach(function(d){[0,1].forEach(function(l){max=Math.max(max,per[d][l].sales)})});
+  h+='<section class="panel"><div class="vhead"><h3>Sales, last 7 days</h3><div class="legend"><span><i style="background:var(--accent)"></i>'+esc(locName(0))+'</span><span><i style="background:var(--teal)"></i>'+esc(locName(1))+'</span></div></div>';
+  if(S.weekErr)h+='<p class="banner warn">Earlier days could not be loaded.</p>';
+  if(!max)h+='<div class="empty">Sales will chart here once customers have been billed.</div>';
+  else{h+='<div class="chart" role="img" aria-label="Daily sales for each location over the last 7 days">';
+    days.forEach(function(d){h+='<div class="day">';[0,1].forEach(function(l){var v=per[d][l].sales;var hh=Math.max(v?3:0,Math.round(v/max*100));h+='<div class="bar'+(l?' b':'')+'" style="height:'+hh+'%" title="'+esc(locName(l)+" "+d+": "+money(v))+'">'+(v?'<span class="num">'+Math.round(v)+'</span>':'')+'</div>'});h+='</div>'});
+    h+='</div><div class="daylbls">'+days.map(function(d){return '<span>'+esc(dayLabel(d))+'</span>'}).join("")+'</div>'}
+  h+='</section>';
+  h+='<section class="panel"><h3>Closed days</h3>';
+  if(!S.closings.length)h+='<div class="empty">Each day you close from the Closing report is saved here with its totals.</div>';
+  else{h+='<div class="scroll"><table class="tbl"><thead><tr><th>Date</th><th>Location</th><th class="r">Customers</th><th class="r">Sales</th><th class="r">Cash</th><th class="r">Credit</th><th class="r">Drawer</th></tr></thead><tbody>';
+    S.closings.slice(0,20).forEach(function(c){var diff=c.counted==null?null:(+c.counted-(+c.expected||0));
+      h+='<tr><td>'+esc(dayLabel(c.date))+'</td><td>'+esc(locName(c.loc))+'</td><td class="r num">'+c.customers+'</td><td class="r num">'+esc(money(c.sales))+'</td><td class="r num">'+esc(money(c.cash))+'</td><td class="r num">'+esc(money(c.credit))+'</td><td class="r num">'+(diff==null?'<span class="muted">not counted</span>':(Math.abs(diff)<0.005?'<span class="diff ok">matches</span>':'<span class="diff bad">'+(diff>0?'+':'-')+esc(money(Math.abs(diff)))+'</span>'))+'</td></tr>'});
+    h+='</tbody></table></div>'}
+  return h+'</section>'}
+
+function viewSettings(){
+  var s=S.settings;
+  var h='<section class="panel"><h2>Shop settings</h2><p class="muted">These apply to both devices and both locations.</p><div class="row">';
+  h+='<label class="f" for="s-l0" style="flex:1 1 200px">First location<input id="s-l0" type="text" value="'+esc(s.locations[0])+'"></label>';
+  h+='<label class="f" for="s-l1" style="flex:1 1 200px">Second location<input id="s-l1" type="text" value="'+esc(s.locations[1])+'"></label>';
+  h+='<label class="f" for="s-cur" style="flex:0 0 100px">Currency<input id="s-cur" type="text" maxlength="4" value="'+esc(s.currency)+'"></label></div>';
+  h+='<label class="f" for="s-staff">Employees, one per line<textarea id="s-staff" placeholder="Add each employee\'s name">'+esc(s.staff.join("\n"))+'</textarea></label>';
+  h+='<label class="f" for="s-svc">Services and usual price, one per line (name, price)<textarea id="s-svc" style="min-height:150px">'+esc(s.services.map(function(x){return x.n+", "+x.p}).join("\n"))+'</textarea></label>';
+  h+='<p class="muted small">The usual price fills in the amount when an employee bills a customer. They can still change it.</p>';
+  h+='<div class="acts"><button class="btn primary" data-act="savesettings"'+(S.busy?' disabled':'')+'>Save settings</button></div></section>';
+  return h}
+
+function main(){
+  var t=S.locked?"checkin":S.tab;
+  if(t==="owner"&&!S.canEdit)t="checkin";if(t==="settings"&&!S.canEdit)t="checkin";
+  if(t==="checkin")return viewCheckin();
+  if(t==="queue")return viewQueue();
+  if(t==="report")return viewReport();
+  if(t==="owner")return viewOwner();
+  return viewSettings()}
+
+function render(){
+  var a=document.activeElement,keep=a&&a.id?{id:a.id,s:a.selectionStart,e:a.selectionEnd}:null;
+  var app=document.getElementById("app");
+  var h=head()+'<main>'+banners()+main()+'</main>';
+  if(S.locked)h+='<div class="lockbar"><button class="btn ghost" data-act="unlock">Staff</button></div>';
+  else if(S.tab==="checkin")h+='<div class="lockbar"><button class="btn ghost" data-act="lock">Lock this tablet to customer check-in</button></div>';
+  app.innerHTML=h;
+  if(keep){var n=document.getElementById(keep.id);if(n){n.focus();try{if(keep.s!=null&&n.setSelectionRange)n.setSelectionRange(keep.s,keep.e)}catch(e){}}}
+}
+
+/* ---------- actions ---------- */
+function startDraft(v){
+  var sum=0;(v.services||[]).forEach(function(s){sum+=svcPrice(s)});
+  S.drafts[v.id]=v.status==="done"?{emp:v.employee||"",amount:v.amount,pay:v.pay,tip:v.tip||""}:{emp:S.lastEmp,amount:sum?sum:"",pay:"",tip:""};
+}
+function findVisit(id){return S.visits.filter(function(v){return v.id===id})[0]}
+document.addEventListener("click",function(ev){
+  var b=ev.target.closest("[data-act]");if(!b)return;var act=b.getAttribute("data-act"),v=b.getAttribute("data-v");
+  if(act==="loc"){S.loc=+v;S.reportLoc=+v;store.set("tt.loc",v);S.open=null;S.confirm=null;if(S.tab==="report")loadReport();else render()}
+  else if(act==="tab"){S.tab=v;store.set("tt.tab",v);S.open=null;S.confirm=null;if(v==="owner")loadWeek();if(v==="report"){S.reportDate=S.reportDate>S.today?S.today:S.reportDate;loadReport()}else render()}
+  else if(act==="svc"){var s=S.settings.services[+v];if(s){if(S.ci.sel[s.n])delete S.ci.sel[s.n];else S.ci.sel[s.n]=1}render()}
+  else if(act==="checkin"){
+    var name=S.ci.name.trim(),svcs=Object.keys(S.ci.sel);
+    if(!name){toast("Please enter your name.");var n=document.getElementById("ci-name");if(n)n.focus();return}
+    if(!svcs.length){toast("Please choose at least one service.");return}
+    var rec={loc:S.loc,date:S.today,name:name,services:svcs,note:S.ci.note.trim(),status:"waiting",ts:Date.now()};
+    write(S.db.collection("visits").add(rec)).then(function(){S.ci={name:"",sel:{},note:""};render();toast("Thanks "+name+", you are checked in.")}).catch(function(){});
+  }
+  else if(act==="open"){var vv=findVisit(v);if(vv){startDraft(vv);S.open=v;S.confirm=null;render()}}
+  else if(act==="closeform"){S.open=null;render()}
+  else if(act==="pay"){var d=S.drafts[S.open];if(d){d.pay=v;render()}}
+  else if(act==="done"){
+    var d2=S.drafts[v]||{};var amt=parseFloat(d2.amount),tip=parseFloat(d2.tip)||0;
+    if(!d2.emp){toast("Choose the employee who did the service.");return}
+    if(!(amt>=0)){toast("Enter the amount charged.");return}
+    if(!d2.pay){toast("Choose cash or credit.");return}
+    S.lastEmp=d2.emp;store.set("tt.emp",d2.emp);
+    write(S.db.doc("visits/"+v).update({status:"done",employee:d2.emp,amount:Math.round(amt*100)/100,pay:d2.pay,tip:Math.round(tip*100)/100,doneTs:Date.now()})).then(function(){S.open=null;delete S.drafts[v];render();toast("Saved.")}).catch(function(){});
+  }
+  else if(act==="askremove"){S.confirm=v;render()}
+  else if(act==="noconfirm"){S.confirm=null;render()}
+  else if(act==="remove"){S.confirm=null;write(S.db.doc("visits/"+v).update({status:"cancelled"})).catch(function(){})}
+  else if(act==="restore"){write(S.db.doc("visits/"+v).update({status:"waiting"})).catch(function(){})}
+  else if(act==="lock"){S.locked=true;store.set("tt.locked","1");render()}
+  else if(act==="unlock"){S.locked=false;store.set("tt.locked","0");render()}
+  else if(act==="gotoreport"){S.reportLoc=+v;S.reportDate=S.today;S.tab="report";store.set("tt.tab","report");loadReport()}
+  else if(act==="copy"){
+    var txt=slipText(S.reportLoc,S.reportDate,stats(reportData()),closingFor(S.reportLoc,S.reportDate));
+    var ok=function(){toast("Summary copied.")},fail=function(){toast("Copy was blocked. Select the totals and copy them by hand.")};
+    try{navigator.clipboard.writeText(txt).then(ok,fail)}catch(e){fail()}
+  }
+  else if(act==="closeday"){
+    var st=stats(reportData()),key=S.reportLoc+"_"+S.reportDate,c=parseFloat(S.counted[key]);
+    var doc={loc:S.reportLoc,date:S.reportDate,customers:st.n,sales:Math.round(st.sales*100)/100,cash:Math.round(st.cash*100)/100,credit:Math.round(st.credit*100)/100,tips:Math.round(st.tips*100)/100,tipCash:Math.round(st.tipCash*100)/100,tipCredit:Math.round(st.tipCredit*100)/100,expected:Math.round((st.cash+st.tipCash)*100)/100,counted:isNaN(c)?null:c,closedTs:Date.now()};
+    write(S.db.doc("closings/"+key).set(doc)).then(function(){toast("Day closed. Totals saved.")}).catch(function(){});
+  }
+  else if(act==="askreopen"){S.confirm="reopen";render()}
+  else if(act==="reopen"){S.confirm=null;write(S.db.doc("closings/"+S.reportLoc+"_"+S.reportDate).delete()).catch(function(){})}
+  else if(act==="savesettings"){
+    var g=function(i){return document.getElementById(i).value};
+    var svcs2=g("s-svc").split("\n").map(function(l){l=l.trim();if(!l)return null;var i=l.lastIndexOf(",");var p=i>-1?parseFloat(l.slice(i+1)):NaN;return isNaN(p)?{n:l,p:0}:{n:l.slice(0,i).trim(),p:p}}).filter(function(x){return x&&x.n});
+    if(!svcs2.length){toast("Add at least one service.");return}
+    var doc2={locations:[g("s-l0").trim()||DEFAULTS.locations[0],g("s-l1").trim()||DEFAULTS.locations[1]],currency:g("s-cur").trim()||"$",staff:g("s-staff").split("\n").map(function(x){return x.trim()}).filter(Boolean),services:svcs2};
+    write(S.db.doc("settings/shop").set(doc2)).then(function(){toast("Settings saved.")}).catch(function(){});
+  }
+});
+function onField(ev){
+  var t=ev.target;
+  if(t.hasAttribute("data-ci")){S.ci[t.getAttribute("data-ci")]=t.value;return}
+  if(t.hasAttribute("data-draft")){var id=t.getAttribute("data-draft");(S.drafts[id]=S.drafts[id]||{})[t.getAttribute("data-f")]=t.value;return}
+  if(t.hasAttribute("data-rep")){var f=t.getAttribute("data-rep");
+    if(f==="counted"){S.counted[S.reportLoc+"_"+S.reportDate]=t.value;return}
+    if(ev.type!=="change")return;
+    if(f==="date"){if(t.value){S.reportDate=t.value>S.today?S.today:t.value;S.confirm=null;loadReport()}}
+    if(f==="loc"){S.reportLoc=+t.value;S.confirm=null;loadReport()}}
+}
+document.addEventListener("input",onField);document.addEventListener("change",onField);
+
+/* ---------- start ---------- */
+render();
+setInterval(function(){
+  var n=dayStr();
+  if(n!==S.today&&S.db){var wasToday=S.reportDate===S.today;S.today=n;if(wasToday)S.reportDate=n;S.week=[];subToday();if(S.tab==="owner")loadWeek();return}
+  document.querySelectorAll("[data-wait]").forEach(function(e){e.textContent=waitMin(+e.getAttribute("data-wait"))});
+},30000);
+
+var wait=function(fn){var tries=0;(function go(){if(window.claude&&window.claude.use){fn()}else if(tries++<20){setTimeout(go,250)}else{S.noDb=true;render()}})()};
+wait(function(){
+  Promise.all([window.claude.use("db"),window.claude.use("user")]).then(function(r){
+    var db=r[0],user=r[1];
+    if(!db){S.noDb=true;render();return}
+    S.db=db;
+    if(user){
+      try{S.canEdit=!!(user.canEdit&&user.canEdit())||!!(user.isOwner&&user.isOwner())}catch(e){}
+      try{S.canWrite=user.can?user.can("data.write"):null}catch(e){}
+      Promise.resolve(S.canWrite).then(function(v){if(v!==S.canWrite){S.canWrite=v;render()}}).catch(function(){});
+    }
+    subSettings();subClosings();subToday();render();
+    if(S.tab==="owner"&&S.canEdit)loadWeek();
+    if(S.tab==="report")loadReport();
+  }).catch(function(){S.noDb=true;render()});
+});
+})();
+</script>
+
+</body></html>

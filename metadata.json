@@ -1,0 +1,8 @@
+{
+  "name": "Élixir & Grâce Luxury Salon Platform",
+  "description": "Multi-tenant white-label luxury beauty salon & spa platform featuring guest appointment booking, location-isolated operator POS with split-payment checkout & tip segregation, and super-admin multi-branch analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

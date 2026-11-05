@@ -1,0 +1,71 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-serif: 'Cormorant Garamond', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    
+    --color-ivory: #FAF8F5;
+    --color-charcoal: #1A1A1A;
+    --color-gold: #C5A880;
+    --color-gold-dark: #A88B63;
+    --color-cream-border: #E8E3DC;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--color-ivory);
+    color: var(--color-charcoal);
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, .font-serif-luxury {
+    font-family: var(--font-serif);
+  }
+
+  .font-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #FAF8F5;
+}
+::-webkit-scrollbar-thumb {
+  background: #D8D2C8;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #C5A880;
+}
+
+/* Till Slip Receipt Styling */
+.slip {
+  font-family: var(--font-mono);
+  background: #FFFFFF;
+  border: 1px solid #E8E3DC;
+  border-radius: 6px;
+  padding: 22px;
+}
+.slip .ln {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.slip .ln .dots {
+  flex: 1;
+  border-bottom: 2px dotted #D9DFE5;
+  transform: translateY(-3px);
+  min-width: 12px;
+}
