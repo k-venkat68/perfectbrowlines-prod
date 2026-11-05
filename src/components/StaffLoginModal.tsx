@@ -10,7 +10,7 @@ interface StaffLoginModalProps {
 }
 
 export const StaffLoginModal: React.FC<StaffLoginModalProps> = ({ isOpen, onClose, onSelectUser }) => {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -21,7 +21,7 @@ export const StaffLoginModal: React.FC<StaffLoginModalProps> = ({ isOpen, onClos
     event.preventDefault();
     setError('');
     setIsSigningIn(true);
-    const result = await salonApi.login(email, password);
+    const result = await salonApi.login(username, password);
     setIsSigningIn(false);
     if ('error' in result) {
       setError(result.error);
@@ -59,16 +59,16 @@ export const StaffLoginModal: React.FC<StaffLoginModalProps> = ({ isOpen, onClos
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="staff-email" className="block text-xs font-semibold text-[#4A4643] mb-1">
-              Work email
+            <label htmlFor="staff-username" className="block text-xs font-semibold text-[#4A4643] mb-1">
+              Username
             </label>
             <input
-              id="staff-email"
-              type="email"
+              id="staff-username"
+              type="text"
               autoComplete="username"
               required
-              value={email}
-              onChange={event => setEmail(event.target.value)}
+              value={username}
+              onChange={event => setUsername(event.target.value)}
               className="w-full px-3 py-2.5 border border-[#E8E3DC] rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-[#C5A880]/40"
             />
           </div>

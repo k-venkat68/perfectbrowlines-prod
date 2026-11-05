@@ -54,13 +54,6 @@ export interface ShopSettings {
   services: Array<{ n: string; p: number; locationPrices?: Record<string, number> }>;
 }
 
-export interface OperatorCompensation {
-  email: string;
-  fullName: string;
-  loc: number;
-  monthlySalary: number;
-}
-
 export interface ServiceSnapshot {
   serviceId: string;
   name: string;
@@ -128,7 +121,7 @@ export interface SalonLocation {
 export interface SalonUser {
   id: string;
   tenantId: string;
-  email: string;
+  username: string;
   role: UserRole;
   assignedLocationId?: string;
   fullName: string;

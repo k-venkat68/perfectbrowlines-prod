@@ -129,24 +129,22 @@ const ShopSettingSchema = new mongoose.Schema({
 }, { timestamps: true, collection: 'shopsettings' });
 
 interface IStaffCredential {
-  email: string;
+  username: string;
   passwordHash: string;
   fullName: string;
   role: 'SUPER_ADMIN' | 'LOCATION_OPERATOR';
   loc?: number;
-  monthlySalary: number;
   isActive: boolean;
 }
 
 const StaffCredentialSchema = new mongoose.Schema<IStaffCredential>({
-  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  username: { type: String, required: true, unique: true, lowercase: true, trim: true },
   passwordHash: { type: String, required: true },
   fullName: { type: String, required: true },
   role: { type: String, enum: ['SUPER_ADMIN', 'LOCATION_OPERATOR'], required: true },
   loc: { type: Number, min: 0, max: 1 },
-  monthlySalary: { type: Number, min: 0, default: 0 },
   isActive: { type: Boolean, default: true }
-}, { timestamps: true, collection: 'staffcredentials' });
+}, { timestamps: true, collection: 'staffcredentials', autoIndex: false });
 
 export const Visit = mongoose.models.Visit || mongoose.model('Visit', VisitSchema);
 export const Closing = mongoose.models.Closing || mongoose.model('Closing', ClosingSchema);
@@ -195,6 +193,46 @@ async function initializeMongoDatabase(): Promise<void> {
     }
   }
 
+  const staffIndexes = await StaffCredential.collection.indexes();
+  for (const index of staffIndexes) {
+    if (index.name && index.name !== '_id_' && index.key?.email === 1) {
+      await StaffCredential.collection.dropIndex(index.name);
+    }
+  }
+  const legacyStaff = await StaffCredential.collection.find({
+    username: { $exists: false },
+    email: { $exists: true }
+  }).project<{
+    _id: mongoose.Types.ObjectId;
+    email: string;
+    role: IStaffCredential['role'];
+    loc?: number;
+  }>({ _id: 1, email: 1, role: 1, loc: 1 }).toArray();
+  const existingUsernames = await StaffCredential.collection.distinct('username', {
+    username: { $exists: true }
+  });
+  const migratedUsernames = new Set(
+    existingUsernames.filter((username): username is string => typeof username === 'string')
+  );
+  for (const account of legacyStaff) {
+    const email = account.email.trim().toLowerCase();
+    const configuredAccount = configuredStaffAccounts().find(candidate =>
+      candidate.role === account.role && candidate.loc === account.loc
+    );
+    const simpleUsername = configuredAccount?.username?.trim().toLowerCase() || email.split('@')[0];
+    let username = simpleUsername;
+    if (migratedUsernames.has(username)) username = email;
+    if (migratedUsernames.has(username)) username = `${simpleUsername}-${String(account._id).slice(-6)}`;
+    migratedUsernames.add(username);
+    await StaffCredential.collection.updateOne(
+      { _id: account._id },
+      { $set: { username }, $unset: { email: '' } }
+    );
+  }
+  if (legacyStaff.length > 0) {
+    console.log(`[MongoDB] Migrated ${legacyStaff.length} staff login(s) to usernames.`);
+  }
+
   await Promise.all(operationalModels.map(model => model.createIndexes()));
   await ShopSetting.updateOne(
     { id: 'shop' },
@@ -202,6 +240,13 @@ async function initializeMongoDatabase(): Promise<void> {
     { upsert: true }
   );
   await seedStaffCredentials();
+  const salaryCleanup = await StaffCredential.collection.updateMany(
+    { monthlySalary: { $exists: true } },
+    { $unset: { monthlySalary: '' } }
+  );
+  if (salaryCleanup.modifiedCount > 0) {
+    console.log(`[MongoDB] Removed legacy salary data from ${salaryCleanup.modifiedCount} staff credentials.`);
+  }
   await Visit.updateMany({ phone: { $exists: false } }, { $set: { phone: '' } });
   console.log('[MongoDB] Operational collections, indexes, and default shop settings are ready.');
 }
@@ -223,7 +268,7 @@ let memoryClosings: IClosingDoc[] = [];
 
 interface StaffSession {
   id: string;
-  email: string;
+  username: string;
   fullName: string;
   role: 'SUPER_ADMIN' | 'LOCATION_OPERATOR';
   loc?: number;
@@ -248,7 +293,7 @@ function getSession(req: express.Request): StaffSession | undefined {
 }
 
 type StaffAccountConfig = {
-  email: string | undefined;
+  username: string | undefined;
   password: string | undefined;
   fullName: string;
   role: IStaffCredential['role'];
@@ -258,20 +303,22 @@ type StaffAccountConfig = {
 function configuredStaffAccounts(): StaffAccountConfig[] {
   const accounts: StaffAccountConfig[] = [
     {
-      email: process.env.ADMIN_LOGIN_EMAIL,
+      username: process.env.ADMIN_LOGIN_USERNAME || process.env.ADMIN_LOGIN_EMAIL?.split('@')[0],
       password: process.env.ADMIN_LOGIN_PASSWORD,
       fullName: 'Founder & Master Stylist (HQ)',
       role: 'SUPER_ADMIN' as const
     },
     {
-      email: process.env.OPERATOR_BATTLECREEK_EMAIL,
+      username: process.env.OPERATOR_BATTLECREEK_USERNAME ||
+        process.env.OPERATOR_BATTLECREEK_EMAIL?.split('@')[0],
       password: process.env.OPERATOR_BATTLECREEK_PASSWORD,
       fullName: 'Battle Creek Operator',
       role: 'LOCATION_OPERATOR' as const,
       loc: 0
     },
     {
-      email: process.env.OPERATOR_JACKSON_EMAIL,
+      username: process.env.OPERATOR_JACKSON_USERNAME ||
+        process.env.OPERATOR_JACKSON_EMAIL?.split('@')[0],
       password: process.env.OPERATOR_JACKSON_PASSWORD,
       fullName: 'Jackson Operator',
       role: 'LOCATION_OPERATOR' as const,
@@ -279,11 +326,11 @@ function configuredStaffAccounts(): StaffAccountConfig[] {
     }
   ];
   return accounts.flatMap(account => {
-    const email = account.email?.trim().toLowerCase();
+    const username = account.username?.trim().toLowerCase();
     const password = account.password;
-    if (!email || !password || /^(change-me|replace|placeholder)/i.test(password)) return [];
+    if (!username || !password || /^(change-me|replace|placeholder)/i.test(password)) return [];
     return [{
-      email,
+      username,
       password,
       fullName: account.fullName,
       role: account.role,
@@ -325,21 +372,20 @@ function verifyPassword(password: string, storedHash: string): Promise<boolean> 
 
 async function seedStaffCredentials(): Promise<void> {
   for (const account of configuredStaffAccounts()) {
-    const email = account.email?.trim().toLowerCase();
+    const username = account.username?.trim().toLowerCase();
     const password = account.password;
-    if (!email || !password || /^(change-me|replace|placeholder)/i.test(password)) continue;
-    if (await StaffCredential.exists({ email })) continue;
+    if (!username || !password || /^(change-me|replace|placeholder)/i.test(password)) continue;
+    if (await StaffCredential.exists({ username })) continue;
 
     await StaffCredential.updateOne(
-      { email },
+      { username },
       {
         $setOnInsert: {
-          email,
+          username,
           passwordHash: await hashPassword(password),
           fullName: account.fullName,
           role: account.role,
           ...(account.loc === undefined ? {} : { loc: account.loc }),
-          monthlySalary: 0,
           isActive: true
         }
       },
@@ -546,7 +592,7 @@ app.get('/api/v1/auth/session', (req, res) => {
     success: true,
     user: {
       id: session.id,
-      email: session.email,
+      username: session.username,
       fullName: session.fullName,
       role: session.role,
       assignedLocationId: session.loc === undefined ? undefined : `loc-${session.loc}`,
@@ -555,89 +601,40 @@ app.get('/api/v1/auth/session', (req, res) => {
   });
 });
 
-app.get('/api/v1/staff/compensation', async (req, res) => {
-  const session = getSession(req);
-  if (!session) return res.status(401).json({ success: false, error: 'Staff sign-in is required.' });
-  if (!isMongoReady()) {
-    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Compensation could not be loaded.' });
-  }
-
-  try {
-    const filter = session.role === 'SUPER_ADMIN'
-      ? { role: 'LOCATION_OPERATOR' as const, isActive: true }
-      : { email: session.email, role: 'LOCATION_OPERATOR' as const, isActive: true };
-    const accounts = await StaffCredential.find(filter)
-      .select('email fullName loc monthlySalary')
-      .sort({ loc: 1 })
-      .lean();
-    return res.json({
-      success: true,
-      operators: accounts.map(account => ({
-        email: account.email,
-        fullName: account.fullName,
-        loc: account.loc,
-        monthlySalary: account.monthlySalary || 0
-      }))
-    });
-  } catch (error) {
-    console.error('[MongoDB staff compensation read failed]:', error);
-    return res.status(500).json({ success: false, error: 'Could not load operator compensation.' });
-  }
-});
-
-app.put('/api/v1/staff/compensation/:email', async (req, res) => {
-  const session = getSession(req);
-  if (!session || session.role !== 'SUPER_ADMIN') {
-    return res.status(403).json({ success: false, error: 'Admin sign-in is required.' });
-  }
-  if (!isMongoReady()) {
-    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Compensation was not saved.' });
-  }
-
-  const email = req.params.email.trim().toLowerCase();
-  const monthlySalary = Number(req.body?.monthlySalary);
-  if (!email || !Number.isFinite(monthlySalary) || monthlySalary < 0) {
-    return res.status(400).json({ success: false, error: 'Provide a valid non-negative monthly salary.' });
-  }
-
-  try {
-    const operator = await StaffCredential.findOneAndUpdate(
-      { email, role: 'LOCATION_OPERATOR', isActive: true },
-      { $set: { monthlySalary: Math.round(monthlySalary * 100) / 100 } },
-      { new: true, runValidators: true }
-    ).select('email fullName loc monthlySalary').lean();
-    if (!operator) return res.status(404).json({ success: false, error: 'Active location operator was not found.' });
-    return res.json({
-      success: true,
-      operator: {
-        email: operator.email,
-        fullName: operator.fullName,
-        loc: operator.loc,
-        monthlySalary: operator.monthlySalary || 0
-      }
-    });
-  } catch (error) {
-    console.error('[MongoDB staff compensation save failed]:', error);
-    return res.status(500).json({ success: false, error: 'Could not save operator compensation.' });
-  }
-});
-
 app.post('/api/v1/auth/login', async (req, res) => {
-  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const loginName = typeof req.body?.username === 'string' ? req.body.username.trim().toLowerCase() : '';
+  const username = loginName.includes('@') ? loginName.split('@')[0] : loginName;
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!username || !password) {
+    return res.status(400).json({ success: false, error: 'Username and password are required.' });
+  }
   if (!isMongoReady()) {
     return res.status(503).json({ success: false, error: 'Staff sign-in is unavailable while MongoDB is disconnected.' });
   }
 
   try {
-    const account = await StaffCredential.findOne({ email, isActive: true }).lean();
-    if (!account || !(await verifyPassword(password, account.passwordHash))) {
-      return res.status(401).json({ success: false, error: 'Email or password is incorrect.' });
+    const account = await StaffCredential.findOne({ username, isActive: true }).lean();
+    let passwordMatches = account ? await verifyPassword(password, account.passwordHash) : false;
+    if (account && !passwordMatches) {
+      const configuredAccount = configuredStaffAccounts().find(item => item.username === username);
+      if (configuredAccount?.password) {
+        const configuredPasswordHash = await hashPassword(configuredAccount.password);
+        passwordMatches = await verifyPassword(password, configuredPasswordHash);
+        if (passwordMatches) {
+          await StaffCredential.updateOne(
+            { _id: account._id },
+            { $set: { passwordHash: configuredPasswordHash } }
+          );
+        }
+      }
+    }
+    if (!account || !passwordMatches) {
+      return res.status(401).json({ success: false, error: 'Username or password is incorrect.' });
     }
 
     const session: StaffSession = {
       id: randomUUID(),
-      email: account.email,
+      username: account.username,
       fullName: account.fullName,
       role: account.role,
       ...(account.role === 'LOCATION_OPERATOR' && account.loc !== undefined ? { loc: account.loc } : {}),
@@ -655,7 +652,7 @@ app.post('/api/v1/auth/login', async (req, res) => {
       success: true,
       user: {
         id: session.id,
-        email: session.email,
+        username: session.username,
         fullName: session.fullName,
         role: session.role,
         assignedLocationId: session.loc === undefined ? undefined : `loc-${session.loc}`,
@@ -679,6 +676,20 @@ app.post('/api/v1/auth/logout', (req, res) => {
 // VISITS API (Check-in, Live Queue, Billing, Served Today)
 // -----------------------------------------------------------------------------
 
+function getUtcDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function getDateMonthsAgo(date: Date, months: number): string {
+  const target = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+  target.setUTCMonth(target.getUTCMonth() - months);
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)
+  ).getUTCDate();
+  target.setUTCDate(Math.min(date.getUTCDate(), lastDayOfTargetMonth));
+  return getUtcDateString(target);
+}
+
 // GET /api/v1/visits?date=YYYY-MM-DD or all
 app.get('/api/v1/visits', async (req, res) => {
   const { date, loc, from, to } = req.query;
@@ -691,7 +702,11 @@ app.get('/api/v1/visits', async (req, res) => {
 
   try {
     const query: Record<string, unknown> = {};
-    if (date) query.date = date;
+    const isOperator = session.role === 'LOCATION_OPERATOR';
+    const today = getUtcDateString(new Date());
+    const operatorDataStart = getDateMonthsAgo(new Date(), 2);
+
+    if (date && !isOperator) query.date = date;
     if (session.role === 'LOCATION_OPERATOR') {
       query.loc = session.loc;
     } else if (loc !== undefined) {
@@ -703,9 +718,29 @@ app.get('/api/v1/visits', async (req, res) => {
     }
     if (from || to) {
       const dateRange: Record<string, string> = {};
-      if (from) dateRange.$gte = from as string;
-      if (to) dateRange.$lte = to as string;
+      if (isOperator) {
+        const requestedFrom = (from as string | undefined) || operatorDataStart;
+        const requestedTo = (to as string | undefined) || today;
+        dateRange.$gte = requestedFrom < operatorDataStart ? operatorDataStart : requestedFrom;
+        dateRange.$lte = requestedTo > today ? today : requestedTo;
+        if (dateRange.$gte > dateRange.$lte) {
+          return res.json({ success: true, visits: [], source: 'mongodb' });
+        }
+      } else {
+        if (from) dateRange.$gte = from as string;
+        if (to) dateRange.$lte = to as string;
+      }
       query.date = dateRange;
+    } else if (isOperator) {
+      if (date) {
+        const requestedDate = date as string;
+        if (requestedDate < operatorDataStart || requestedDate > today) {
+          return res.json({ success: true, visits: [], source: 'mongodb' });
+        }
+        query.date = requestedDate;
+      } else {
+        query.date = { $gte: operatorDataStart, $lte: today };
+      }
     }
     const visits = await Visit.find(query).sort({ ts: 1 }).lean();
     return res.json({ success: true, visits, source: 'mongodb' });
@@ -936,6 +971,74 @@ app.get('/api/v1/settings', async (req, res) => {
   }
 
   res.json({ success: true, settings: memorySettings, pricingLocked: true, source: 'memory' });
+});
+
+app.put('/api/v1/settings/services/:name/price/:location', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ success: false, error: 'Admin sign-in is required.' });
+  }
+
+  const name = req.params.name.trim();
+  const location = Number(req.params.location);
+  const price = req.body?.price;
+  if (
+    !name ||
+    name.length > 100 ||
+    !Number.isInteger(location) ||
+    (location !== 0 && location !== 1) ||
+    typeof price !== 'number' ||
+    !Number.isFinite(price) ||
+    price < 0
+  ) {
+    return res.status(400).json({ success: false, error: 'Provide a valid service, location, and non-negative price.' });
+  }
+  if (!isMongoReady()) {
+    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Service price was not saved.' });
+  }
+
+  try {
+    const openOrder = await Visit.exists({ status: { $in: ['waiting', 'in_service'] } });
+    if (openOrder) {
+      return res.status(409).json({
+        success: false,
+        error: 'Service and price changes are locked while orders are in progress. Complete or cancel all open orders at every location, then try again.',
+        pricingLocked: true
+      });
+    }
+
+    const settings = await ShopSetting.findOne({ id: 'shop' });
+    if (!settings) {
+      return res.status(404).json({ success: false, error: 'Shop settings were not found.' });
+    }
+    const service = settings.services.find(item => item.n === name);
+    if (!service) {
+      return res.status(404).json({ success: false, error: 'Service was not found. Refresh settings and try again.' });
+    }
+
+    service.locationPrices = {
+      ...service.locationPrices,
+      [String(location)]: Math.round(price * 100) / 100
+    };
+    settings.markModified('services');
+    const saved = await settings.save();
+    memorySettings = {
+      locations: saved.locations || memorySettings.locations,
+      currency: saved.currency || memorySettings.currency,
+      staff: saved.staff || memorySettings.staff,
+      services: saved.services || memorySettings.services
+    };
+    const remainingOpenOrder = await Visit.exists({ status: { $in: ['waiting', 'in_service'] } });
+    return res.json({
+      success: true,
+      settings: memorySettings,
+      pricingLocked: Boolean(remainingOpenOrder),
+      source: 'mongodb'
+    });
+  } catch (error) {
+    console.error('[MongoDB service price save failed]:', error);
+    return res.status(500).json({ success: false, error: 'Could not save service price.' });
+  }
 });
 
 // POST /api/v1/settings

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { VisitItem, ClosingRecord, ShopSettings, SalonUser, OperatorCompensation } from './types';
+import { VisitItem, ClosingRecord, ShopSettings, SalonUser } from './types';
 import { salonApi } from './api/salonApi';
 import { StaffLoginModal } from './components/StaffLoginModal';
 import { motion, useReducedMotion } from 'motion/react';
@@ -39,6 +39,15 @@ function addDays(s: string, n: number): string {
   return dayStr(d);
 }
 
+function addMonths(s: string, n: number): string {
+  const [year, month, day] = s.split('-').map(Number);
+  const targetMonth = month - 1 + n;
+  const targetYear = year + Math.floor(targetMonth / 12);
+  const normalizedMonth = ((targetMonth % 12) + 12) % 12;
+  const targetDay = Math.min(day, new Date(targetYear, normalizedMonth + 1, 0).getDate());
+  return dayStr(new Date(targetYear, normalizedMonth, targetDay));
+}
+
 function dayLabel(s: string): string {
   const d = new Date(s + 'T00:00:00');
   return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
@@ -47,14 +56,6 @@ function dayLabel(s: string): string {
 function longDay(s: string): string {
   const d = new Date(s + 'T00:00:00');
   return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-}
-
-function monthsTouched(from: string, to: string): number {
-  if (!from || !to || from > to) return 0;
-  const [fromYear, fromMonth] = from.slice(0, 7).split('-').map(Number);
-  const [toYear, toMonth] = to.slice(0, 7).split('-').map(Number);
-  if (![fromYear, fromMonth, toYear, toMonth].every(Number.isFinite)) return 0;
-  return (toYear - fromYear) * 12 + toMonth - fromMonth + 1;
 }
 
 function waitMin(ts: number): number {
@@ -118,8 +119,6 @@ export default function App() {
   const [customFrom, setCustomFrom] = useState(`${today.slice(0, 7)}-01`);
   const [customTo, setCustomTo] = useState(today);
   const [closings, setClosings] = useState<ClosingRecord[]>([]);
-  const [operatorCompensation, setOperatorCompensation] = useState<OperatorCompensation[]>([]);
-  const [salaryDrafts, setSalaryDrafts] = useState<Record<string, string>>({});
 
   // Check-in Form state
   const [ciName, setCiName] = useState<string>('');
@@ -241,27 +240,7 @@ export default function App() {
     });
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    if (!currentUser) {
-      setOperatorCompensation([]);
-      setSalaryDrafts({});
-      return;
-    }
-
-    salonApi.fetchOperatorCompensation().then(operators => {
-      if (!active) return;
-      if (!operators) {
-        showToast('Could not load operator compensation. Please refresh and try again.');
-        return;
-      }
-      setOperatorCompensation(operators);
-    });
-    return () => {
-      active = false;
-    };
-  }, [currentUser]);
-
+  const operatorDataStart = useMemo(() => addMonths(today, -2), [today]);
   const analyticsDateRange = useMemo(() => {
     switch (analyticsPeriod) {
       case 'today':
@@ -270,13 +249,17 @@ export default function App() {
         return { from: addDays(today, -6), to: today, label: 'Last 7 days' };
       case 'last30':
         return { from: addDays(today, -29), to: today, label: 'Last 30 days' };
-      case 'custom':
-        return { from: customFrom, to: customTo, label: `${customFrom} to ${customTo}` };
+      case 'custom': {
+        const from = currentUser?.role === 'LOCATION_OPERATOR' && customFrom < operatorDataStart
+          ? operatorDataStart
+          : customFrom;
+        return { from, to: customTo, label: `${from} to ${customTo}` };
+      }
       case 'month':
       default:
         return { from: `${today.slice(0, 7)}-01`, to: today, label: 'Month to date' };
     }
-  }, [analyticsPeriod, customFrom, customTo, today]);
+  }, [analyticsPeriod, customFrom, customTo, currentUser?.role, operatorDataStart, today]);
 
   const handleRefreshData = async () => {
     if (isRefreshing) return;
@@ -294,18 +277,16 @@ export default function App() {
       const reportRequest = currentUser?.role === 'SUPER_ADMIN'
         ? salonApi.fetchVisits({ date: reportDate }, { strict: true })
         : Promise.resolve(null);
-      const [baseDataLoaded, analyticsResults, reportResults, operators] = await Promise.all([
+      const [baseDataLoaded, analyticsResults, reportResults] = await Promise.all([
         loadData(),
         analyticsRequest,
-        reportRequest,
-        salonApi.fetchOperatorCompensation()
+        reportRequest
       ]);
 
       setAnalyticsVisits(analyticsResults);
       if (reportResults) setReportVisitsForDate(reportResults);
-      if (operators) setOperatorCompensation(operators);
 
-      if (!baseDataLoaded || !operators) {
+      if (!baseDataLoaded) {
         showToast('Some data could not be refreshed. Check the connection and try again.');
         return;
       }
@@ -627,31 +608,6 @@ export default function App() {
     if (await persistSettings(updated)) showToast('Staff settings saved successfully.');
   };
 
-  const handleSaveOperatorSalary = async (operator: OperatorCompensation) => {
-    const draft = salaryDrafts[operator.email];
-    if (draft === undefined) return;
-    const monthlySalary = Number(draft);
-    if (!draft.trim() || !Number.isFinite(monthlySalary) || monthlySalary < 0) {
-      showToast('Enter a valid non-negative monthly salary.');
-      return;
-    }
-
-    const updated = await salonApi.saveOperatorSalary(operator.email, monthlySalary);
-    if (!updated) {
-      showToast(`Could not save salary for ${operator.fullName}.`);
-      return;
-    }
-    setOperatorCompensation(current => current.map(item =>
-      item.email === updated.email ? updated : item
-    ));
-    setSalaryDrafts(current => {
-      const next = { ...current };
-      delete next[operator.email];
-      return next;
-    });
-    showToast(`Monthly salary saved for ${operator.fullName}.`);
-  };
-
   const handleSaveService = async (event: React.FormEvent) => {
     event.preventDefault();
     if (pricingLocked) {
@@ -693,50 +649,38 @@ export default function App() {
       return;
     }
 
-    const services = settings.services.map(service =>
-      service.n === name
-        ? {
-            ...service,
-            locationPrices: {
-              ...service.locationPrices,
-              [String(servicePriceLocation)]: Math.round(price * 100) / 100
-            }
-          }
-        : service
-    );
-    if (await persistSettings({ ...settings, services })) {
-      setServicePriceDrafts(current => {
-        const next = { ...current };
-        delete next[draftKey];
-        return next;
-      });
-      setDeletingServiceName(null);
-      showToast(`${name} price saved for ${locName(servicePriceLocation)}.`);
+    const result = await salonApi.saveServicePrice(name, servicePriceLocation, price);
+    if (!result.success || !result.settings) {
+      setPricingLocked(result.pricingLocked ?? true);
+      showToast(result.error || `Could not save ${name} price for ${locName(servicePriceLocation)}.`);
+      return;
     }
+    setSettings(result.settings);
+    setPricingLocked(result.pricingLocked ?? false);
+    setServicePriceDrafts(current => {
+      const next = { ...current };
+      delete next[draftKey];
+      return next;
+    });
+    setDeletingServiceName(null);
+    showToast(`${name} price saved for ${locName(servicePriceLocation)} only.`);
   };
 
-  const handleResetServicePrice = async (name: string) => {
+  const handleUpdateDefaultGlobally = async () => {
     if (pricingLocked) {
       showToast('Complete or cancel all open orders before changing service prices.');
       return;
     }
-    const service = settings.services.find(item => item.n === name);
-    if (service?.locationPrices?.[String(servicePriceLocation)] === undefined) return;
+    if (!settings.services.some(service => Object.keys(service.locationPrices || {}).length > 0)) return;
 
-    const locationPrices = { ...service.locationPrices };
-    delete locationPrices[String(servicePriceLocation)];
-    const services = settings.services.map(item =>
-      item.n === name
-        ? { ...item, locationPrices }
-        : item
-    );
+    const services = settings.services.map(service => ({
+      ...service,
+      p: Math.round(servicePrice(service, servicePriceLocation) * 100) / 100,
+      locationPrices: {}
+    }));
     if (await persistSettings({ ...settings, services })) {
-      setServicePriceDrafts(current => {
-        const next = { ...current };
-        delete next[`${servicePriceLocation}:${name}`];
-        return next;
-      });
-      showToast(`${name} now uses the shared default at ${locName(servicePriceLocation)}.`);
+      setServicePriceDrafts({});
+      showToast(`Default prices updated globally using ${locName(servicePriceLocation)} prices.`);
     }
   };
 
@@ -858,53 +802,16 @@ export default function App() {
     [analyticsVisits, currentUser?.fullName, loc]
   );
   const operatorAnalyticsStats = useMemo(() => computeStats(operatorAnalyticsVisits), [operatorAnalyticsVisits]);
-  const currentOperatorCompensation = operatorCompensation.find(operator => operator.email === currentUser?.email);
-  const operatorSalaryAllocation = currentOperatorCompensation
-    ? currentOperatorCompensation.monthlySalary * monthsTouched(analyticsDateRange.from, analyticsDateRange.to)
-    : null;
-  const adminOperatorStats = useMemo(
-    () => operatorCompensation.map(operator => {
-      const operatorVisits = analyticsVisits.filter(
-        visit => visit.loc === operator.loc && visit.employee === operator.fullName
-      );
-      const stats = computeStats(operatorVisits);
-      return {
-        ...operator,
-        ...stats,
-        salaryExpense: operator.monthlySalary * monthsTouched(analyticsDateRange.from, analyticsDateRange.to),
-        profitAfterSalary: stats.sales - operator.monthlySalary * monthsTouched(analyticsDateRange.from, analyticsDateRange.to)
-      };
-    }),
-    [analyticsVisits, analyticsDateRange, operatorCompensation]
-  );
-  const selectedAdminOperators = useMemo(
-    () => adminOperatorStats.filter(operator =>
-      analyticsLocation === 'all' || operator.loc === Number(analyticsLocation)
-    ),
-    [adminOperatorStats, analyticsLocation]
-  );
-  const analyticsSalaryExpense = useMemo(
-    () => selectedAdminOperators.reduce((total, operator) => total + operator.salaryExpense, 0),
-    [selectedAdminOperators]
-  );
-  const analyticsProfitAfterSalary = analyticsStats.sales - analyticsSalaryExpense;
   const overviewPnl = useMemo(() => {
-    const from = addDays(today, -6);
     const completedVisits = weekVisits.filter(visit => visit.status === 'done');
     const grossSales = completedVisits.reduce((total, visit) => total + (Number(visit.amount) || 0), 0);
-    const salaryExpense = operatorCompensation.reduce(
-      (total, operator) => total + operator.monthlySalary * monthsTouched(from, today),
-      0
-    );
     const operatingCostEstimate = Math.round(grossSales * 0.15 * 100) / 100;
     return {
       grossSales,
       completedCount: completedVisits.length,
-      salaryExpense,
-      profitAfterSalary: grossSales - salaryExpense,
       operatingCostEstimate
     };
-  }, [operatorCompensation, today, weekVisits]);
+  }, [weekVisits]);
   const adminTabs = [
     { id: 'owner', label: 'Overview', Icon: TrendingUp },
     { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
@@ -1557,8 +1464,13 @@ export default function App() {
                       id="operator-analytics-from"
                       type="date"
                       value={customFrom}
+                      min={currentUser.role === 'LOCATION_OPERATOR' ? operatorDataStart : undefined}
                       max={today}
-                      onChange={event => setCustomFrom(event.target.value)}
+                      onChange={event => setCustomFrom(
+                        currentUser.role === 'LOCATION_OPERATOR'
+                          ? event.target.value < operatorDataStart ? operatorDataStart : event.target.value
+                          : event.target.value
+                      )}
                       className="w-full px-3 py-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono"
                     />
                   </div>
@@ -1584,17 +1496,11 @@ export default function App() {
 
             {analyticsDateRange.from <= analyticsDateRange.to && (
               <>
-                <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+                <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                   {[
                     { label: 'Completed visits', value: operatorAnalyticsStats.n, accent: 'text-[#16202A]' },
                     { label: 'Service sales', value: money(operatorAnalyticsStats.sales), accent: 'text-[#B3315A]' },
-                    { label: 'Tips earned · selected range', value: money(operatorAnalyticsStats.tips), accent: 'text-teal-800' },
-                    { label: 'Monthly base salary', value: currentOperatorCompensation ? money(currentOperatorCompensation.monthlySalary) : 'Not set', accent: 'text-[#16202A]' },
-                    {
-                      label: 'Salary + tips · before deductions',
-                      value: operatorSalaryAllocation === null ? 'Not set' : money(operatorSalaryAllocation + operatorAnalyticsStats.tips),
-                      accent: 'text-emerald-800'
-                    }
+                    { label: 'Tips earned · selected range', value: money(operatorAnalyticsStats.tips), accent: 'text-teal-800' }
                   ].map(metric => (
                     <div key={metric.label} className="bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
@@ -1602,33 +1508,11 @@ export default function App() {
                     </div>
                   ))}
                 </section>
-                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs">
-                  <h3 className="font-bold text-base text-[#16202A]">Compensation summary</h3>
-                  <p className="text-xs text-[#5B6875] mt-1">
-                    Salary is set by your administrator. The estimate uses the full monthly salary for each calendar month touched by this range, plus tips recorded on your completed orders. It is before deductions.
-                  </p>
-                  <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                    <div className="p-3 bg-[#F2F4F6] rounded-lg flex justify-between gap-2">
-                      <span>Base salary allocation</span>
-                      <strong className="font-mono">{operatorSalaryAllocation === null ? 'Not set' : money(operatorSalaryAllocation)}</strong>
-                    </div>
-                    <div className="p-3 bg-[#F2F4F6] rounded-lg flex justify-between gap-2">
-                      <span>Tips from completed orders</span>
-                      <strong className="font-mono">{money(operatorAnalyticsStats.tips)}</strong>
-                    </div>
-                    <div className="p-3 bg-emerald-50 rounded-lg flex justify-between gap-2 sm:col-span-2">
-                      <span className="font-semibold">Estimated salary + tips before deductions</span>
-                      <strong className="font-mono text-emerald-800">
-                        {operatorSalaryAllocation === null ? 'Not set' : money(operatorSalaryAllocation + operatorAnalyticsStats.tips)}
-                      </strong>
-                    </div>
-                  </div>
-                </section>
                 <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
                   <div>
                     <h3 className="font-bold text-base text-[#16202A]">Orders you completed</h3>
                     <p className="text-xs text-[#5B6875] mt-1">
-                      Completed orders checked out under your operator account during {analyticsDateRange.label.toLowerCase()}. Tips are included in the compensation totals above.
+                      Completed orders checked out under your operator account during {analyticsDateRange.label.toLowerCase()}. Tips are included in the totals above.
                     </p>
                   </div>
                   {operatorAnalyticsVisits.filter(visit => visit.status === 'done').length === 0 ? (
@@ -1772,15 +1656,13 @@ export default function App() {
 
             {analyticsDateRange.from <= analyticsDateRange.to && (
               <>
-                <section className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+                <section className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-3 gap-3">
                   {[
                     { label: 'Total visits', value: analyticsScopedVisits.length, accent: 'text-[#16202A]' },
                     { label: 'Clients served', value: analyticsStats.n, accent: 'text-[#16202A]' },
                     { label: 'Service sales', value: money(analyticsStats.sales), accent: 'text-[#B3315A]' },
                     { label: 'Tips collected', value: money(analyticsStats.tips), accent: 'text-teal-800' },
-                    { label: 'Open orders', value: analyticsStats.waiting + analyticsStats.inService, accent: 'text-amber-700' },
-                    { label: 'Base salary deducted', value: money(analyticsSalaryExpense), accent: 'text-rose-700' },
-                    { label: 'Profit after salary', value: money(analyticsProfitAfterSalary), accent: analyticsProfitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800' }
+                    { label: 'Open orders', value: analyticsStats.waiting + analyticsStats.inService, accent: 'text-amber-700' }
                   ].map(metric => (
                     <div key={metric.label} className="flex min-h-24 min-w-0 flex-col justify-between overflow-hidden bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
@@ -1788,10 +1670,6 @@ export default function App() {
                     </div>
                   ))}
                 </section>
-                <p className="text-[11px] text-[#7A8692] -mt-2">
-                  Payroll uses the full monthly base salary for each calendar month touched by this date range. Profit after salary excludes the separate 15% operating-cost estimate.
-                </p>
-
                 <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#D9DFE5] pb-3">
                     <div>
@@ -1808,10 +1686,6 @@ export default function App() {
                         const salesShare = analyticsAllStats.sales > 0
                           ? Math.round((location.sales / analyticsAllStats.sales) * 100)
                           : 0;
-                        const salaryExpense = selectedAdminOperators
-                          .filter(operator => operator.loc === location.location)
-                          .reduce((total, operator) => total + operator.salaryExpense, 0);
-                        const profitAfterSalary = location.sales - salaryExpense;
                         return (
                           <article key={location.location} className="flex h-full flex-col rounded-xl border border-[#D9DFE5] p-4 space-y-3">
                             <div className="flex items-start justify-between gap-3">
@@ -1833,8 +1707,6 @@ export default function App() {
                               </div>
                             </div>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[#E9EDF1] pt-3 text-xs">
-                              <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Base salary deducted</span><strong>{money(salaryExpense)}</strong></div>
-                              <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Profit after salary</span><strong className={profitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800'}>{money(profitAfterSalary)}</strong></div>
                               <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Clients served</span><strong>{location.n}</strong></div>
                               <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Waiting</span><strong>{location.waiting}</strong></div>
                               <div className="flex justify-between gap-2"><span className="text-[#5B6875]">Tips</span><strong>{money(location.tips)}</strong></div>
@@ -1882,57 +1754,6 @@ export default function App() {
                   )}
                 </section>
 
-                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 sm:p-6 shadow-xs space-y-3">
-                  <div className="border-b border-[#D9DFE5] pb-3">
-                    <h3 className="font-bold text-base text-[#16202A]">Operator compensation</h3>
-                    <p className="text-xs text-[#5B6875] mt-1">
-                      Monthly base salary is separate from tips earned during {analyticsDateRange.label.toLowerCase()}.
-                    </p>
-                  </div>
-                  {adminOperatorStats.filter(operator =>
-                    analyticsLocation === 'all' || operator.loc === Number(analyticsLocation)
-                  ).length === 0 ? (
-                    <p className="py-5 text-center text-sm text-[#5B6875]">No active location operators are configured.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[860px] text-left text-xs">
-                        <thead>
-                          <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
-                            <th className="py-2 pr-3">Operator</th>
-                            <th className="py-2 px-2">Location</th>
-                            <th className="py-2 px-2 text-right">Clients</th>
-                            <th className="py-2 px-2 text-right">Service sales</th>
-                            <th className="py-2 px-2 text-right">Tips in period</th>
-                            <th className="py-2 px-2 text-right">Base / month</th>
-                            <th className="py-2 px-2 text-right">Salary deducted</th>
-                            <th className="py-2 pl-2 text-right">Profit after salary</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-[#E9EDF1]">
-                          {adminOperatorStats
-                            .filter(operator => analyticsLocation === 'all' || operator.loc === Number(analyticsLocation))
-                            .map(operator => (
-                              <tr key={operator.email}>
-                                <td className="py-3 pr-3 font-semibold text-[#16202A]">{operator.fullName}</td>
-                                <td className="py-3 px-2 text-[#5B6875]">{locName(operator.loc)}</td>
-                                <td className="py-3 px-2 text-right font-mono">{operator.n}</td>
-                                <td className="py-3 px-2 text-right font-mono">{money(operator.sales)}</td>
-                                <td className="py-3 px-2 text-right font-mono">{money(operator.tips)}</td>
-                                <td className="py-3 px-2 text-right font-mono">{money(operator.monthlySalary)}</td>
-                                <td className="py-3 px-2 text-right font-mono text-rose-700">−{money(operator.salaryExpense)}</td>
-                                <td className={`py-3 pl-2 text-right font-mono font-semibold ${operator.profitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
-                                  {money(operator.profitAfterSalary)}
-                                </td>
-                              </tr>
-                            ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <p className="text-[11px] text-[#7A8692]">
-                    Salary deducted uses the full monthly base salary for each calendar month touched by the selected range. Set salaries in Settings → Operator salaries.
-                  </p>
-                </section>
               </>
             )}
           </div>
@@ -2409,54 +2230,21 @@ export default function App() {
               </div>
             </section>
 
-            {/* Weekly profit view with monthly base salaries charged for each month touched. */}
             <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#D9DFE5] pb-3">
-                <div>
-                  <h3 className="font-bold text-base text-[#16202A]">Weekly profit &amp; payroll</h3>
-                  <p className="text-xs text-[#5B6875] mt-1">
-                    Completed service sales minus base salaries. Tips are excluded from business revenue.
-                  </p>
-                </div>
-                <span className={`text-xs font-bold px-2 py-1 rounded border ${
-                  overviewPnl.grossSales > 0
-                    ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
-                    : 'text-[#5B6875] bg-[#F2F4F6] border-[#D9DFE5]'
-                }`}>
-                  {overviewPnl.grossSales > 0
-                    ? `${((overviewPnl.profitAfterSalary / overviewPnl.grossSales) * 100).toFixed(1)}% after-payroll margin`
-                    : 'No sales this week'}
-                </span>
+              <div className="border-b border-[#D9DFE5] pb-3">
+                <h3 className="font-bold text-base text-[#16202A]">Weekly sales overview</h3>
+                <p className="text-xs text-[#5B6875] mt-1">Completed service sales and estimated operating costs for the last 7 days.</p>
               </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                 <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-[#5B6875]">Gross service sales · last 7 days</span>
                   <span className="text-2xl font-bold font-mono tabular-nums text-[#16202A]">{money(overviewPnl.grossSales)}</span>
                   <span className="text-[10px] text-[#5B6875]">{overviewPnl.completedCount} completed treatments</span>
                 </div>
-                <div className="flex min-h-28 flex-col justify-between p-4 bg-rose-50 border border-rose-100 rounded-lg">
-                  <span className="text-[10px] uppercase font-bold text-rose-800">Base salary deducted</span>
-                  <span className="text-2xl font-bold font-mono tabular-nums text-rose-800">−{money(overviewPnl.salaryExpense)}</span>
-                  <span className="text-[10px] text-rose-700">Full monthly salary for each calendar month touched</span>
-                </div>
-                <div className={`flex min-h-28 flex-col justify-between p-4 rounded-lg border ${
-                  overviewPnl.profitAfterSalary < 0
-                    ? 'bg-rose-50 border-rose-100'
-                    : 'bg-emerald-50 border-emerald-100'
-                }`}>
-                  <span className={`text-[10px] uppercase font-bold ${
-                    overviewPnl.profitAfterSalary < 0 ? 'text-rose-800' : 'text-emerald-800'
-                  }`}>Profit after salary</span>
-                  <span className={`text-2xl font-bold font-mono tabular-nums ${
-                    overviewPnl.profitAfterSalary < 0 ? 'text-rose-800' : 'text-emerald-800'
-                  }`}>{money(overviewPnl.profitAfterSalary)}</span>
-                  <span className="text-[10px] text-[#5B6875]">Before the separate operating-cost estimate</span>
-                </div>
                 <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg">
                   <span className="text-[10px] uppercase font-bold text-[#5B6875]">Operating-cost estimate · 15%</span>
                   <span className="text-2xl font-bold font-mono tabular-nums text-[#5B6875]">{money(overviewPnl.operatingCostEstimate)}</span>
-                  <span className="text-[10px] text-[#5B6875]">Estimate only; not deducted from profit above</span>
+                  <span className="text-[10px] text-[#5B6875]">Estimate only</span>
                 </div>
               </div>
             </section>
@@ -2559,63 +2347,6 @@ export default function App() {
         )}
 
         {tab === 'settings' && currentUser?.role === 'SUPER_ADMIN' && (
-          <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
-            <div>
-              <h2 className="text-xl font-bold font-serif text-[#16202A]">Operator salaries</h2>
-              <p className="text-xs text-[#5B6875] mt-1">
-                Set the monthly base salary for each location operator. Salary details are visible only to admins and the assigned operator.
-              </p>
-            </div>
-            {operatorCompensation.length === 0 ? (
-              <p className="text-sm text-[#5B6875]">
-                No active operators are available. Configure operator login accounts and connect MongoDB to manage salaries.
-              </p>
-            ) : (
-              <div className="divide-y divide-[#E9EDF1] border-y border-[#E9EDF1]">
-                {operatorCompensation.map(operator => (
-                  <div key={operator.email} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                    <div>
-                      <p className="text-sm font-semibold text-[#16202A]">{operator.fullName}</p>
-                      <p className="text-xs text-[#5B6875]">{locName(operator.loc)} · {operator.email}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1 text-xs text-[#5B6875]">
-                        <span>{settings.currency}</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          required
-                          aria-label={`${operator.fullName} monthly salary`}
-                          value={salaryDrafts[operator.email] ?? String(operator.monthlySalary)}
-                          onChange={event => setSalaryDrafts(current => ({
-                            ...current,
-                            [operator.email]: event.target.value
-                          }))}
-                          className="w-32 p-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono text-[#16202A]"
-                        />
-                        <span>/ month</span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => handleSaveOperatorSalary(operator)}
-                        disabled={
-                          salaryDrafts[operator.email] === undefined ||
-                          Number(salaryDrafts[operator.email]) === operator.monthlySalary
-                        }
-                        className="px-3 py-2 bg-[#B3315A] text-white rounded-lg text-xs font-semibold hover:bg-[#9B254A] disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed cursor-pointer"
-                      >
-                        Save
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-
-        {tab === 'settings' && currentUser?.role === 'SUPER_ADMIN' && (
           <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-5">
             <div>
               <h2 className="text-xl font-bold font-serif text-[#16202A]">Services &amp; Prices</h2>
@@ -2693,8 +2424,8 @@ export default function App() {
                     <p className="text-sm font-semibold text-[#16202A]">{service.n}</p>
                     <p className="text-[11px] text-[#5B6875]">
                       {service.locationPrices?.[String(servicePriceLocation)] === undefined
-                        ? `Using shared default: ${money(service.p)}`
-                        : `Custom price for ${locName(servicePriceLocation)}`}
+                        ? `Using shared default at ${money(service.p)}`
+                        : `Custom price for ${locName(servicePriceLocation)} only`}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -2730,16 +2461,6 @@ export default function App() {
                     >
                       Save
                     </button>
-                    {service.locationPrices?.[String(servicePriceLocation)] !== undefined && (
-                      <button
-                        type="button"
-                        onClick={() => handleResetServicePrice(service.n)}
-                        disabled={pricingLocked}
-                        className="px-3 py-2 border border-[#D9DFE5] text-[#5B6875] rounded-lg text-xs font-semibold hover:border-[#B3315A]/50 cursor-pointer disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed"
-                      >
-                        Use default
-                      </button>
-                    )}
                     <button
                       type="button"
                       onClick={() => handleDeleteService(service.n)}
@@ -2756,6 +2477,21 @@ export default function App() {
                 </div>
               ))}
             </div>
+            {settings.services.some(service => Object.keys(service.locationPrices || {}).length > 0) && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#E9EDF1] pt-4">
+                <p className="text-xs text-[#5B6875]">
+                  Apply {locName(servicePriceLocation)} prices as the shared default for every location:
+                </p>
+                <button
+                  type="button"
+                  onClick={handleUpdateDefaultGlobally}
+                  disabled={pricingLocked}
+                  className="px-3 py-2 border border-[#D9DFE5] text-[#5B6875] rounded-lg text-xs font-semibold hover:border-[#B3315A]/50 cursor-pointer disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed"
+                >
+                  Update default globally
+                </button>
+              </div>
+            )}
           </section>
         )}
         </motion.div>
