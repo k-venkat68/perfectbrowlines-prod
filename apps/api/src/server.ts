@@ -8,12 +8,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
-import { randomUUID, timingSafeEqual } from 'crypto';
-
-dotenv.config();
+import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '../../..');
+
+dotenv.config({ path: path.resolve(projectRoot, '.env') });
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -22,9 +23,9 @@ const isProd = process.env.NODE_ENV === 'production';
 app.use(express.json());
 
 // Static Assets Routing (Ensures images load reliably in all environments)
-app.use('/images', express.static(path.resolve(__dirname, 'public/images')));
-app.use('/src/assets/images', express.static(path.resolve(__dirname, 'public/images')));
-app.use(express.static(path.resolve(__dirname, 'public')));
+app.use('/images', express.static(path.resolve(projectRoot, 'public/images')));
+app.use('/src/assets/images', express.static(path.resolve(projectRoot, 'public/images')));
+app.use(express.static(path.resolve(projectRoot, 'public')));
 
 // =============================================================================
 // MONGOOSE SCHEMAS & MODELS
@@ -118,9 +119,29 @@ const ShopSettingSchema = new mongoose.Schema({
   }]
 }, { timestamps: true, collection: 'shopsettings' });
 
+interface IStaffCredential {
+  email: string;
+  passwordHash: string;
+  fullName: string;
+  role: 'SUPER_ADMIN' | 'LOCATION_OPERATOR';
+  loc?: number;
+  isActive: boolean;
+}
+
+const StaffCredentialSchema = new mongoose.Schema<IStaffCredential>({
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, required: true },
+  fullName: { type: String, required: true },
+  role: { type: String, enum: ['SUPER_ADMIN', 'LOCATION_OPERATOR'], required: true },
+  loc: { type: Number, min: 0, max: 1 },
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true, collection: 'staffcredentials' });
+
 export const Visit = mongoose.models.Visit || mongoose.model('Visit', VisitSchema);
 export const Closing = mongoose.models.Closing || mongoose.model('Closing', ClosingSchema);
 export const ShopSetting = mongoose.models.ShopSetting || mongoose.model('ShopSetting', ShopSettingSchema);
+const StaffCredential = mongoose.models.StaffCredential ||
+  mongoose.model<IStaffCredential>('StaffCredential', StaffCredentialSchema);
 
 // =============================================================================
 // IN-MEMORY RESILIENT BACKUP DATA STORE
@@ -142,7 +163,7 @@ const DEFAULT_SETTINGS = {
   ]
 };
 
-const operationalModels = [Visit, Closing, ShopSetting];
+const operationalModels = [Visit, Closing, ShopSetting, StaffCredential];
 
 async function initializeMongoDatabase(): Promise<void> {
   const db = mongoose.connection.db;
@@ -169,6 +190,7 @@ async function initializeMongoDatabase(): Promise<void> {
     { $setOnInsert: { ...DEFAULT_SETTINGS } },
     { upsert: true }
   );
+  await seedStaffCredentials();
   await Visit.updateMany({ phone: { $exists: false } }, { $set: { phone: '' } });
   console.log('[MongoDB] Operational collections, indexes, and default shop settings are ready.');
 }
@@ -214,16 +236,16 @@ function getSession(req: express.Request): StaffSession | undefined {
   return session;
 }
 
-function credentialsMatch(actual: string, expected: string | undefined): boolean {
-  if (!expected || /^(change-me|replace|placeholder)/i.test(expected)) return false;
-  const actualBytes = Buffer.from(actual);
-  const expectedBytes = Buffer.from(expected);
-  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
-}
+type StaffAccountConfig = {
+  email: string | undefined;
+  password: string | undefined;
+  fullName: string;
+  role: IStaffCredential['role'];
+  loc?: number;
+};
 
-function staffConfig(email: string) {
-  const normalizedEmail = email.trim().toLowerCase();
-  const accounts = [
+function configuredStaffAccounts(): StaffAccountConfig[] {
+  const accounts: StaffAccountConfig[] = [
     {
       email: process.env.ADMIN_LOGIN_EMAIL,
       password: process.env.ADMIN_LOGIN_PASSWORD,
@@ -245,7 +267,73 @@ function staffConfig(email: string) {
       loc: 1
     }
   ];
-  return accounts.find(account => account.email?.trim().toLowerCase() === normalizedEmail);
+  return accounts.flatMap(account => {
+    const email = account.email?.trim().toLowerCase();
+    const password = account.password;
+    if (!email || !password || /^(change-me|replace|placeholder)/i.test(password)) return [];
+    return [{
+      email,
+      password,
+      fullName: account.fullName,
+      role: account.role,
+      ...('loc' in account ? { loc: account.loc } : {})
+    }];
+  });
+}
+
+function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(16);
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, 64, (error, derivedKey) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(`scrypt$${salt.toString('hex')}$${derivedKey.toString('hex')}`);
+    });
+  });
+}
+
+function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const [algorithm, saltHex, hashHex] = storedHash.split('$');
+  if (algorithm !== 'scrypt' || !saltHex || !hashHex || !/^[\da-f]+$/i.test(saltHex) || !/^[\da-f]+$/i.test(hashHex)) {
+    return Promise.resolve(false);
+  }
+  const expected = Buffer.from(hashHex, 'hex');
+  if (expected.length !== 64) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
+    scrypt(password, Buffer.from(saltHex, 'hex'), expected.length, (error, derivedKey) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(timingSafeEqual(derivedKey, expected));
+    });
+  });
+}
+
+async function seedStaffCredentials(): Promise<void> {
+  for (const account of configuredStaffAccounts()) {
+    const email = account.email?.trim().toLowerCase();
+    const password = account.password;
+    if (!email || !password || /^(change-me|replace|placeholder)/i.test(password)) continue;
+    if (await StaffCredential.exists({ email })) continue;
+
+    await StaffCredential.updateOne(
+      { email },
+      {
+        $setOnInsert: {
+          email,
+          passwordHash: await hashPassword(password),
+          fullName: account.fullName,
+          role: account.role,
+          ...(account.loc === undefined ? {} : { loc: account.loc }),
+          isActive: true
+        }
+      },
+      { upsert: true }
+    );
+  }
 }
 
 function isShopService(value: unknown): value is { n: string; p: number } {
@@ -434,41 +522,50 @@ app.get('/api/v1/auth/session', (req, res) => {
   });
 });
 
-app.post('/api/v1/auth/login', (req, res) => {
-  const email = typeof req.body?.email === 'string' ? req.body.email : '';
+app.post('/api/v1/auth/login', async (req, res) => {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  const account = staffConfig(email);
-  if (!account || !credentialsMatch(password, account.password)) {
-    return res.status(401).json({ success: false, error: 'Email or password is incorrect.' });
+  if (!isMongoReady()) {
+    return res.status(503).json({ success: false, error: 'Staff sign-in is unavailable while MongoDB is disconnected.' });
   }
 
-  const session: StaffSession = {
-    id: randomUUID(),
-    email: account.email!.trim().toLowerCase(),
-    fullName: account.fullName,
-    role: account.role,
-    ...(account.role === 'LOCATION_OPERATOR' ? { loc: account.loc } : {}),
-    expiresAt: Date.now() + SESSION_DURATION_MS
-  };
-  staffSessions.set(session.id, session);
-  res.cookie(SESSION_COOKIE, session.id, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isProd,
-    path: '/',
-    maxAge: SESSION_DURATION_MS
-  });
-  res.json({
-    success: true,
-    user: {
-      id: session.id,
-      email: session.email,
-      fullName: session.fullName,
-      role: session.role,
-      assignedLocationId: session.loc === undefined ? undefined : `loc-${session.loc}`,
-      isActive: true
+  try {
+    const account = await StaffCredential.findOne({ email, isActive: true }).lean();
+    if (!account || !(await verifyPassword(password, account.passwordHash))) {
+      return res.status(401).json({ success: false, error: 'Email or password is incorrect.' });
     }
-  });
+
+    const session: StaffSession = {
+      id: randomUUID(),
+      email: account.email,
+      fullName: account.fullName,
+      role: account.role,
+      ...(account.role === 'LOCATION_OPERATOR' && account.loc !== undefined ? { loc: account.loc } : {}),
+      expiresAt: Date.now() + SESSION_DURATION_MS
+    };
+    staffSessions.set(session.id, session);
+    res.cookie(SESSION_COOKIE, session.id, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProd,
+      path: '/',
+      maxAge: SESSION_DURATION_MS
+    });
+    return res.json({
+      success: true,
+      user: {
+        id: session.id,
+        email: session.email,
+        fullName: session.fullName,
+        role: session.role,
+        assignedLocationId: session.loc === undefined ? undefined : `loc-${session.loc}`,
+        isActive: true
+      }
+    });
+  } catch (error) {
+    console.error('[MongoDB staff sign-in failed]:', error);
+    return res.status(500).json({ success: false, error: 'Could not verify staff credentials.' });
+  }
 });
 
 app.post('/api/v1/auth/logout', (req, res) => {
@@ -797,9 +894,9 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.use(express.static(path.resolve(projectRoot, 'dist')));
     app.get('*', (req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.resolve(projectRoot, 'dist', 'index.html'));
     });
   }
 

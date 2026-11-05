@@ -19,7 +19,8 @@ import {
   Sparkles,
   BarChart3,
   Calendar,
-  Users
+  Users,
+  Settings as SettingsIcon
 } from 'lucide-react';
 
 function dayStr(d?: Date): string {
@@ -110,7 +111,8 @@ export default function App() {
 
   // Closing Report state
   const [reportDate, setReportDate] = useState<string>(today);
-  const [reportLoc, setReportLoc] = useState<number>(0);
+  const [reportLocs, setReportLocs] = useState<number[]>([0]);
+  const [reportVisitsForDate, setReportVisitsForDate] = useState<VisitItem[]>([]);
   const [countedDrawer, setCountedDrawer] = useState<string>('');
   const [isClosingDay, setIsClosingDay] = useState<boolean>(false);
   const [confirmReopen, setConfirmReopen] = useState<boolean>(false);
@@ -119,7 +121,7 @@ export default function App() {
   const [staffText, setStaffText] = useState<string>('');
   const [serviceNameDraft, setServiceNameDraft] = useState('');
   const [servicePriceDraft, setServicePriceDraft] = useState('');
-  const [editingServiceName, setEditingServiceName] = useState<string | null>(null);
+  const [servicePriceDrafts, setServicePriceDrafts] = useState<Record<string, string>>({});
   const [deletingServiceName, setDeletingServiceName] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -196,7 +198,7 @@ export default function App() {
       setCurrentUser(user);
       if (user.assignedLocationId === 'loc-0') setLoc(0);
       if (user.assignedLocationId === 'loc-1') setLoc(1);
-      setTab(user.role === 'SUPER_ADMIN' ? 'analytics' : 'queue');
+      setTab(user.role === 'SUPER_ADMIN' ? 'owner' : 'queue');
     });
   }, []);
 
@@ -248,10 +250,32 @@ export default function App() {
     return currentStudioVisits.filter(v => v.status === 'waiting').length;
   }, [currentStudioVisits]);
 
-  const reportVisits = useMemo(() => {
-    const source = reportDate === today ? visits : weekVisits;
-    return source.filter(v => v.loc === reportLoc && v.date === reportDate).sort((a, b) => a.ts - b.ts);
-  }, [visits, weekVisits, reportDate, reportLoc, today]);
+  useEffect(() => {
+    if (currentUser?.role !== 'SUPER_ADMIN') {
+      setReportVisitsForDate([]);
+      return;
+    }
+
+    let active = true;
+    const loadReportVisits = async () => {
+      const results = await salonApi.fetchVisits({ date: reportDate });
+      if (active) setReportVisitsForDate(results);
+    };
+
+    loadReportVisits();
+    return () => {
+      active = false;
+    };
+  }, [currentUser, reportDate]);
+
+  const reportLocationLabel = useMemo(
+    () => reportLocs.map(location => locName(location)).join(' + '),
+    [reportLocs, settings.locations]
+  );
+  const reportVisits = useMemo(
+    () => reportVisitsForDate.filter(visit => reportLocs.includes(visit.loc)).sort((a, b) => a.ts - b.ts),
+    [reportVisitsForDate, reportLocs]
+  );
 
   // Stats calculation
   const computeStats = (vs: VisitItem[]) => {
@@ -294,10 +318,15 @@ export default function App() {
   };
 
   const reportStats = useMemo(() => computeStats(reportVisits), [reportVisits]);
+  const selectedClosings = useMemo(
+    () => reportLocs.map(location => closings.find(closing => closing.id === `${location}_${reportDate}`) || null),
+    [closings, reportDate, reportLocs]
+  );
   const currentClosing = useMemo(() => {
-    const key = `${reportLoc}_${reportDate}`;
+    if (reportLocs.length !== 1) return null;
+    const key = `${reportLocs[0]}_${reportDate}`;
     return closings.find(c => c.id === key) || null;
-  }, [closings, reportLoc, reportDate]);
+  }, [closings, reportLocs, reportDate]);
 
   // Service toggle in check-in
   const toggleSvc = (name: string) => {
@@ -390,8 +419,13 @@ export default function App() {
 
   // Close Day (Pushes to MongoDB)
   const handleCloseDay = async () => {
+    if (reportLocs.length !== 1) {
+      showToast('Select one location to close its day.');
+      return;
+    }
     setIsClosingDay(true);
     const counted = countedDrawer ? parseFloat(countedDrawer) : null;
+    const reportLoc = reportLocs[0];
     const key = `${reportLoc}_${reportDate}`;
     const expected = Math.round((reportStats.cash + reportStats.tipCash) * 100) / 100;
 
@@ -421,6 +455,11 @@ export default function App() {
 
   // Reopen Day
   const handleReopenDay = async () => {
+    if (reportLocs.length !== 1) {
+      showToast('Select one location to reopen its day.');
+      return;
+    }
+    const reportLoc = reportLocs[0];
     const key = `${reportLoc}_${reportDate}`;
     const ok = await salonApi.reopenClosing(key);
     if (ok) {
@@ -462,36 +501,41 @@ export default function App() {
       return;
     }
     const duplicate = settings.services.some(service =>
-      service.n.toLocaleLowerCase() === name.toLocaleLowerCase() && service.n !== editingServiceName
+      service.n.toLocaleLowerCase() === name.toLocaleLowerCase()
     );
     if (duplicate) {
       showToast('A service with that name already exists.');
       return;
     }
-    const services = editingServiceName
-      ? settings.services.map(service => service.n === editingServiceName ? { n: name, p: Math.round(price * 100) / 100 } : service)
-      : [...settings.services, { n: name, p: Math.round(price * 100) / 100 }];
+    const services = [...settings.services, { n: name, p: Math.round(price * 100) / 100 }];
     if (await persistSettings({ ...settings, services })) {
-      if (editingServiceName && editingServiceName !== name) {
-        setCiSel(selected => {
-          if (!selected[editingServiceName]) return selected;
-          const next = { ...selected, [name]: true };
-          delete next[editingServiceName];
-          return next;
-        });
-      }
       setServiceNameDraft('');
       setServicePriceDraft('');
-      setEditingServiceName(null);
-      showToast(editingServiceName ? 'Service updated.' : 'Service added.');
+      showToast('Service added.');
     }
   };
 
-  const handleEditService = (service: { n: string; p: number }) => {
-    setEditingServiceName(service.n);
-    setServiceNameDraft(service.n);
-    setServicePriceDraft(String(service.p));
-    setDeletingServiceName(null);
+  const handleSaveServicePrice = async (name: string) => {
+    const draft = servicePriceDrafts[name];
+    if (draft === undefined) return;
+    const price = Number(draft);
+    if (!draft.trim() || !Number.isFinite(price) || price < 0) {
+      showToast('Enter a valid non-negative service price.');
+      return;
+    }
+
+    const services = settings.services.map(service =>
+      service.n === name ? { ...service, p: Math.round(price * 100) / 100 } : service
+    );
+    if (await persistSettings({ ...settings, services })) {
+      setServicePriceDrafts(current => {
+        const next = { ...current };
+        delete next[name];
+        return next;
+      });
+      setDeletingServiceName(null);
+      showToast(`${name} price saved.`);
+    }
   };
 
   const handleDeleteService = async (name: string) => {
@@ -505,11 +549,11 @@ export default function App() {
     }
     const services = settings.services.filter(service => service.n !== name);
     if (await persistSettings({ ...settings, services })) {
-      if (editingServiceName === name) {
-        setEditingServiceName(null);
-        setServiceNameDraft('');
-        setServicePriceDraft('');
-      }
+      setServicePriceDrafts(current => {
+        const next = { ...current };
+        delete next[name];
+        return next;
+      });
       setCiSel(selected => {
         const next = { ...selected };
         delete next[name];
@@ -525,7 +569,7 @@ export default function App() {
     const st = reportStats;
     const cl = currentClosing;
     const lines = [
-      `${locName(reportLoc)} - ${longDay(reportDate)}`,
+      `${reportLocationLabel} - ${longDay(reportDate)}`,
       `Customers served: ${st.n}`,
       `Total sales: ${money(st.sales)}`,
       `Cash sales: ${money(st.cash)}`,
@@ -603,6 +647,12 @@ export default function App() {
     () => Object.entries(analyticsStats.by).sort(([, a], [, b]) => b.sales - a.sales),
     [analyticsStats]
   );
+  const adminTabs = [
+    { id: 'owner', label: 'Overview', Icon: TrendingUp },
+    { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
+    { id: 'report', label: 'Closing report', Icon: Receipt },
+    { id: 'settings', label: 'Settings', Icon: SettingsIcon }
+  ] as const;
 
   return (
     <div className="min-h-screen bg-[#F2F4F6] text-[#16202A] font-sans antialiased pb-20 selection:bg-[#B3315A]/20">
@@ -627,7 +677,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setLoc(0);
-                  setReportLoc(0);
+                  setReportLocs([0]);
                   setOpenVisitId(null);
                 }}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
@@ -642,7 +692,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   setLoc(1);
-                  setReportLoc(1);
+                  setReportLocs([1]);
                   setOpenVisitId(null);
                 }}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
@@ -695,70 +745,25 @@ export default function App() {
                 </span>
               )}
             </button>}
-            {currentUser?.role === 'SUPER_ADMIN' && <button
-              type="button"
-              onClick={() => {
-                setTab('report');
-                setOpenVisitId(null);
-              }}
-              className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                tab === 'report'
-                  ? 'bg-[#B3315A] text-white shadow-xs'
-                  : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
-              }`}
-            >
-              Closing report
-            </button>}
-
-            {/* Admin only tabs */}
-            {currentUser?.role === 'SUPER_ADMIN' && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTab('analytics');
-                    setOpenVisitId(null);
-                  }}
-                  className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                    tab === 'analytics'
-                      ? 'bg-[#B3315A] text-white shadow-xs'
-                      : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
-                  }`}
-                >
-                  <BarChart3 className={`w-4 h-4 ${tab === 'analytics' ? 'text-white' : 'text-[#C5A880]'}`} />
-                  <span>Analytics</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTab('owner');
-                    setOpenVisitId(null);
-                  }}
-                  className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                    tab === 'owner'
-                      ? 'bg-[#B3315A] text-white shadow-xs'
-                      : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
-                  }`}
-                >
-                  <TrendingUp className={`w-4 h-4 ${tab === 'owner' ? 'text-white' : 'text-[#C5A880]'}`} />
-                  <span>Overview</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTab('settings');
-                    setOpenVisitId(null);
-                  }}
-                  className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                    tab === 'settings'
-                      ? 'bg-[#B3315A] text-white shadow-xs'
-                      : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
-                  }`}
-                >
-                  Settings
-                </button>
-              </>
-            )}
+            {currentUser?.role === 'SUPER_ADMIN' && adminTabs.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                aria-current={tab === id ? 'page' : undefined}
+                onClick={() => {
+                  setTab(id);
+                  setOpenVisitId(null);
+                }}
+                className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
+                  tab === id
+                    ? 'bg-[#B3315A] text-white shadow-xs'
+                    : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
+                }`}
+              >
+                <Icon className={`w-4 h-4 ${tab === id ? 'text-white' : 'text-[#C5A880]'}`} />
+                <span>{label}</span>
+              </button>
+            ))}
           </nav>
         )}
 
@@ -1367,28 +1372,46 @@ export default function App() {
                   type="date"
                   value={reportDate}
                   max={today}
-                  onChange={e => setReportDate(e.target.value)}
+                  onChange={e => {
+                    setReportDate(e.target.value);
+                    setCountedDrawer('');
+                    setConfirmReopen(false);
+                  }}
                   className="px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs font-mono font-bold"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#5B6875] mb-1">Location</label>
-                <select
-                  value={reportLoc}
-                  onChange={e => setReportLoc(parseInt(e.target.value, 10))}
-                  className="px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs font-semibold"
-                >
-                  <option value={0}>{locName(0)}</option>
-                  <option value={1}>{locName(1)}</option>
-                </select>
-              </div>
+              <fieldset className="min-w-[220px]">
+                <legend className="block text-xs font-bold text-[#5B6875] mb-1">Locations</legend>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {settings.locations.map((name, location) => (
+                    <label key={name} className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#16202A] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={reportLocs.includes(location)}
+                        onChange={() => {
+                          setReportLocs(current => {
+                            if (current.includes(location)) {
+                              return current.length > 1 ? current.filter(item => item !== location) : current;
+                            }
+                            return [...current, location].sort((a, b) => a - b);
+                          });
+                          setCountedDrawer('');
+                          setConfirmReopen(false);
+                        }}
+                        className="accent-[#B3315A]"
+                      />
+                      {name}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
 
               <div className="ml-auto">
                 <span className={`px-3 py-1 rounded text-xs font-bold ${
-                  currentClosing ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                  selectedClosings.every(Boolean) ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
                 }`}>
-                  {currentClosing ? 'Day Closed' : 'Day Open'}
+                  {selectedClosings.filter(Boolean).length} of {selectedClosings.length} {selectedClosings.length === 1 ? 'location closed' : 'locations closed'}
                 </span>
               </div>
             </div>
@@ -1397,7 +1420,7 @@ export default function App() {
               {/* Authentic Till Slip Receipt */}
               <section className="slip shadow-sm space-y-2">
                 <div className="text-center font-bold text-base tracking-wide uppercase">
-                  {locName(reportLoc)}
+                  {reportLocationLabel}
                 </div>
                 <div className="text-center text-xs text-[#5B6875]">
                   {longDay(reportDate)}
@@ -1504,7 +1527,34 @@ export default function App() {
                     Close the Day
                   </h3>
 
-                  {currentClosing ? (
+                  {reportLocs.length > 1 ? (
+                    <div className="space-y-3">
+                      <p className="text-xs text-[#5B6875]">
+                        This report combines multiple locations. Select one location above to close or reopen its day.
+                      </p>
+                      <ul className="space-y-1.5 text-xs">
+                        {reportLocs.map((location, index) => {
+                          const closing = selectedClosings[index];
+                          return (
+                            <li key={location} className="flex items-center justify-between gap-3">
+                              <span>{locName(location)}</span>
+                              <span className={closing ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
+                                {closing ? `Closed ${clock(closing.closedTs)}` : 'Open'}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={handleCopySlip}
+                        className="px-3 py-2 bg-white border border-[#D9DFE5] text-xs font-semibold rounded hover:bg-[#F2F4F6] flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy combined summary</span>
+                      </button>
+                    </div>
+                  ) : currentClosing ? (
                     <div className="space-y-3">
                       <p className="text-xs text-[#5B6875]">
                         Closed at {clock(currentClosing.closedTs)}. Totals saved to database: {money(currentClosing.sales)} from {currentClosing.customers} clients.
@@ -1937,7 +1987,7 @@ export default function App() {
               </p>
             </div>
 
-            <form onSubmit={handleSaveService} className="grid grid-cols-1 sm:grid-cols-[1fr_150px_auto_auto] gap-3 items-end">
+            <form onSubmit={handleSaveService} className="grid grid-cols-1 sm:grid-cols-[1fr_150px_auto] gap-3 items-end">
               <div>
                 <label htmlFor="service-name" className="block text-xs font-bold text-[#5B6875] mb-1">Service name</label>
                 <input
@@ -1968,21 +2018,8 @@ export default function App() {
                 type="submit"
                 className="px-4 py-2.5 bg-[#B3315A] text-white text-xs font-bold rounded-lg cursor-pointer hover:bg-[#9B254A]"
               >
-                {editingServiceName ? 'Save changes' : 'Add service'}
+                Add service
               </button>
-              {editingServiceName && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingServiceName(null);
-                    setServiceNameDraft('');
-                    setServicePriceDraft('');
-                  }}
-                  className="px-4 py-2.5 border border-[#D9DFE5] text-[#5B6875] text-xs font-semibold rounded-lg cursor-pointer"
-                >
-                  Cancel
-                </button>
-              )}
             </form>
 
             <div className="divide-y divide-[#E9EDF1] border-y border-[#E9EDF1]">
@@ -1990,15 +2027,34 @@ export default function App() {
                 <div key={service.n} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div>
                     <p className="text-sm font-semibold text-[#16202A]">{service.n}</p>
-                    <p className="text-xs text-[#5B6875] font-mono">{money(service.p)}</p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-xs text-[#5B6875]">
+                      <span>{settings.currency}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        required
+                        aria-label={`${service.n} price`}
+                        value={servicePriceDrafts[service.n] ?? String(service.p)}
+                        onChange={event => {
+                          setServicePriceDrafts(current => ({ ...current, [service.n]: event.target.value }));
+                          setDeletingServiceName(null);
+                        }}
+                        className="w-28 p-2 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-mono text-[#16202A]"
+                      />
+                    </label>
                     <button
                       type="button"
-                      onClick={() => handleEditService(service)}
-                      className="px-3 py-1.5 border border-[#D9DFE5] rounded text-xs font-semibold text-[#16202A] hover:border-[#B3315A] cursor-pointer"
+                      onClick={() => handleSaveServicePrice(service.n)}
+                      disabled={
+                        servicePriceDrafts[service.n] === undefined ||
+                        Number(servicePriceDrafts[service.n]) === service.p
+                      }
+                      className="px-3 py-2 bg-[#B3315A] text-white rounded-lg text-xs font-semibold hover:bg-[#9B254A] disabled:bg-[#E9EDF1] disabled:text-[#7A8692] disabled:cursor-not-allowed cursor-pointer"
                     >
-                      Edit
+                      Save
                     </button>
                     <button
                       type="button"
