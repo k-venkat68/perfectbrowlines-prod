@@ -80,7 +80,10 @@ export const salonApi = {
     }
   },
 
-  async fetchVisits(params?: { date?: string; loc?: number; from?: string; to?: string }): Promise<VisitItem[]> {
+  async fetchVisits(
+    params?: { date?: string; loc?: number; from?: string; to?: string },
+    options?: { strict?: boolean }
+  ): Promise<VisitItem[]> {
     try {
       const sp = new URLSearchParams();
       if (params?.date) sp.append('date', params.date);
@@ -94,9 +97,13 @@ export const salonApi = {
       if (data.success && Array.isArray(data.visits)) {
         return data.visits;
       }
+      if (options?.strict) {
+        throw new Error(data.error || `Visit refresh failed (HTTP ${res.status}).`);
+      }
       return [];
     } catch (err) {
       console.error('[salonApi] fetchVisits failed', err);
+      if (options?.strict) throw err;
       return [];
     }
   },
@@ -122,7 +129,10 @@ export const salonApi = {
     }
   },
 
-  async updateVisit(id: string, updates: { status: 'done'; tip: number; pay: 'cash' | 'card' }): Promise<VisitItem | null> {
+  async updateVisit(
+    id: string,
+    updates: { status: 'in_service' } | { status: 'done'; tip: number; pay: 'cash' | 'card' }
+  ): Promise<VisitItem | null> {
     try {
       const res = await fetch(`/api/v1/visits/${id}`, {
         method: 'PUT',

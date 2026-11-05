@@ -39,12 +39,13 @@ export interface IVisitDoc {
   phone: string;
   services: string[];
   note: string;
-  status: 'waiting' | 'done' | 'cancelled';
+  status: 'waiting' | 'in_service' | 'done' | 'cancelled';
   amount: number;
   pay: 'cash' | 'card' | 'credit' | '';
   tip: number;
   employee: string;
   ts: number;
+  serviceStartedTs?: number;
   doneTs?: number;
 }
 
@@ -56,12 +57,13 @@ const VisitSchema = new mongoose.Schema({
   phone: { type: String, required: true },
   services: [{ type: String }],
   note: { type: String, default: '' },
-  status: { type: String, enum: ['waiting', 'done', 'cancelled'], default: 'waiting', index: true },
+  status: { type: String, enum: ['waiting', 'in_service', 'done', 'cancelled'], default: 'waiting', index: true },
   amount: { type: Number, default: 0 },
   pay: { type: String, enum: ['cash', 'card', 'credit', ''], default: '' },
   tip: { type: Number, default: 0 },
   employee: { type: String, default: '' },
   ts: { type: Number, default: () => Date.now() },
+  serviceStartedTs: { type: Number },
   doneTs: { type: Number }
 }, { timestamps: true, collection: 'visits' });
 VisitSchema.index({ loc: 1, date: 1, ts: 1 });
@@ -724,8 +726,8 @@ app.post('/api/v1/visits', async (req, res) => {
   if (!normalizedName) {
     return res.status(400).json({ success: false, error: 'Name is required.' });
   }
-  if (digitsOnlyPhone.length < 10 || digitsOnlyPhone.length > 15) {
-    return res.status(400).json({ success: false, error: 'Enter a valid phone number.' });
+  if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(digitsOnlyPhone)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid 10-digit US phone number.' });
   }
   if (!Number.isInteger(selectedLocation) || (selectedLocation !== 0 && selectedLocation !== 1)) {
     return res.status(400).json({ success: false, error: 'Select a valid studio location.' });
@@ -771,36 +773,57 @@ app.post('/api/v1/visits', async (req, res) => {
   }
 });
 
-// PUT /api/v1/visits/:id (Operator checkout; customer orders cannot be edited or deleted)
+// PUT /api/v1/visits/:id (Operator service start and checkout; customer orders cannot be edited or deleted)
 app.put('/api/v1/visits/:id', async (req, res) => {
   const { id } = req.params;
   const session = getSession(req);
   if (!session || session.role !== 'LOCATION_OPERATOR') {
-    return res.status(403).json({ success: false, error: 'Only a location operator can check out a customer.' });
+    return res.status(403).json({ success: false, error: 'Only a location operator can update or check out an order.' });
   }
   if (!isMongoReady()) {
-    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Checkout was not saved.' });
+    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. The order update was not saved.' });
   }
 
-  const { tip, pay } = req.body || {};
+  const { status, tip, pay } = req.body || {};
+  if (status === 'in_service') {
+    if (Object.keys(req.body || {}).length !== 1) {
+      return res.status(400).json({ success: false, error: 'Starting service only accepts a status update.' });
+    }
+
+    try {
+      const serviceStartedTs = Date.now();
+      const updated = await Visit.findOneAndUpdate(
+        { id, loc: session.loc, status: 'waiting' },
+        { $set: { status: 'in_service', employee: session.fullName, serviceStartedTs } },
+        { new: true, runValidators: true }
+      ).lean();
+      if (!updated) return res.status(404).json({ success: false, error: 'This waiting order was not found at your location.' });
+      const index = memoryVisits.findIndex(visit => visit.id === id);
+      if (index !== -1) memoryVisits[index] = { ...memoryVisits[index], ...updated } as IVisitDoc;
+      return res.json({ success: true, visit: updated, source: 'mongodb' });
+    } catch (err) {
+      console.error('[MongoDB visit service start error]:', err);
+      return res.status(500).json({ success: false, error: 'Could not start service. Please try again.' });
+    }
+  }
+
   const numericTip = Number(tip);
   if (Object.keys(req.body || {}).some(key => key !== 'tip' && key !== 'pay' && key !== 'status')) {
     return res.status(400).json({ success: false, error: 'Operators may only set a tip and payment method.' });
   }
-  if (req.body?.status !== 'done' || !Number.isFinite(numericTip) || numericTip < 0 ||
+  if (status !== 'done' || !Number.isFinite(numericTip) || numericTip < 0 ||
       (pay !== 'cash' && pay !== 'card')) {
     return res.status(400).json({ success: false, error: 'A valid tip, Cash or Card payment, and checkout confirmation are required.' });
   }
 
   try {
     const updated = await Visit.findOneAndUpdate(
-      { id, loc: session.loc, status: 'waiting' },
+      { id, loc: session.loc, status: 'in_service' },
       {
         $set: {
           status: 'done',
           tip: Math.round(numericTip * 100) / 100,
           pay,
-          employee: session.fullName,
           doneTs: Date.now()
         }
       },
@@ -899,7 +922,7 @@ app.get('/api/v1/settings', async (req, res) => {
     try {
       const [s, openOrder] = await Promise.all([
         ShopSetting.findOne({ id: 'shop' }).lean(),
-        Visit.exists({ status: 'waiting' })
+        Visit.exists({ status: { $in: ['waiting', 'in_service'] } })
       ]);
       return res.json({
         success: true,
@@ -957,7 +980,7 @@ app.post('/api/v1/settings', async (req, res) => {
   try {
     const [existingSettings, openOrder] = await Promise.all([
       ShopSetting.findOne({ id: 'shop' }).lean(),
-      Visit.exists({ status: 'waiting' })
+      Visit.exists({ status: { $in: ['waiting', 'in_service'] } })
     ]);
     const currentServices = existingSettings?.services || memorySettings.services;
     const pricingLocked = Boolean(openOrder);
@@ -981,7 +1004,7 @@ app.post('/api/v1/settings', async (req, res) => {
       staff: saved.staff || memorySettings.staff,
       services: saved.services || memorySettings.services
     };
-    const remainingOpenOrder = await Visit.exists({ status: 'waiting' });
+    const remainingOpenOrder = await Visit.exists({ status: { $in: ['waiting', 'in_service'] } });
     return res.json({
       success: true,
       settings: memorySettings,

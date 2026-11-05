@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { VisitItem, ClosingRecord, ShopSettings, SalonUser, OperatorCompensation } from './types';
 import { salonApi } from './api/salonApi';
 import { StaffLoginModal } from './components/StaffLoginModal';
+import { motion, useReducedMotion } from 'motion/react';
 import {
   TrendingUp,
   MapPin,
@@ -19,6 +20,7 @@ import {
   Sparkles,
   BarChart3,
   Calendar,
+  RefreshCw,
   Users,
   Settings as SettingsIcon
 } from 'lucide-react';
@@ -62,7 +64,15 @@ function clock(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function formatUsPhone(value: string): string {
+  const digits = value.replace(/\D/g, '').slice(0, 10);
+  if (digits.length <= 3) return digits ? `(${digits}` : '';
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+}
+
 export default function App() {
+  const prefersReducedMotion = useReducedMotion();
   const [loc, setLoc] = useState<number>(0); // 0 = Battle Creek, 1 = Jackson
   const [tab, setTab] = useState<'checkin' | 'queue' | 'analytics' | 'report' | 'owner' | 'settings'>('checkin');
   const [currentUser, setCurrentUser] = useState<SalonUser | null>(null);
@@ -75,6 +85,7 @@ export default function App() {
   // MongoDB status
   const [mongoStatus, setMongoStatus] = useState<string>('connecting');
   const [mongoReadyState, setMongoReadyState] = useState<number>(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Settings
   const [settings, setSettings] = useState<ShopSettings>({
@@ -118,6 +129,7 @@ export default function App() {
 
   // Queue Billing Drawer state
   const [openVisitId, setOpenVisitId] = useState<string | null>(null);
+  const [updatingVisitId, setUpdatingVisitId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { pay: 'cash' | 'card'; tip: number | '' }>>({});
 
   // Closing Report state
@@ -175,7 +187,7 @@ export default function App() {
     service.locationPrices?.[String(location)] ?? service.p;
 
   // Load initial data & connect with MongoDB
-  const loadData = async () => {
+  const loadData = async (): Promise<boolean> => {
     try {
       const health = await salonApi.checkHealth();
       setMongoStatus(health.mongodb?.status || 'demo-memory-mode');
@@ -205,8 +217,10 @@ export default function App() {
         setMonthVisits([]);
         setClosings([]);
       }
+      return health.mongodb?.readyState === 1 && s !== null;
     } catch (err) {
       console.warn('[App] Load data failed', err);
+      return false;
     }
   };
 
@@ -263,6 +277,46 @@ export default function App() {
     }
   }, [analyticsPeriod, customFrom, customTo, today]);
 
+  const handleRefreshData = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      if (analyticsDateRange.from > analyticsDateRange.to) {
+        showToast('Choose a valid analytics date range before refreshing.');
+        return;
+      }
+
+      const analyticsRequest = salonApi.fetchVisits(
+        { from: analyticsDateRange.from, to: analyticsDateRange.to },
+        { strict: true }
+      );
+      const reportRequest = currentUser?.role === 'SUPER_ADMIN'
+        ? salonApi.fetchVisits({ date: reportDate }, { strict: true })
+        : Promise.resolve(null);
+      const [baseDataLoaded, analyticsResults, reportResults, operators] = await Promise.all([
+        loadData(),
+        analyticsRequest,
+        reportRequest,
+        salonApi.fetchOperatorCompensation()
+      ]);
+
+      setAnalyticsVisits(analyticsResults);
+      if (reportResults) setReportVisitsForDate(reportResults);
+      if (operators) setOperatorCompensation(operators);
+
+      if (!baseDataLoaded || !operators) {
+        showToast('Some data could not be refreshed. Check the connection and try again.');
+        return;
+      }
+      showToast('Latest data refreshed.');
+    } catch (err) {
+      console.error('[App] Manual data refresh failed', err);
+      showToast('Could not refresh latest data. Check the connection and try again.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   useEffect(() => {
     if (!currentUser || analyticsDateRange.from > analyticsDateRange.to) {
       setAnalyticsVisits([]);
@@ -294,6 +348,16 @@ export default function App() {
   const waitingCount = useMemo(() => {
     return currentStudioVisits.filter(v => v.status === 'waiting').length;
   }, [currentStudioVisits]);
+  const inServiceCount = useMemo(
+    () => currentStudioVisits.filter(visit => visit.status === 'in_service').length,
+    [currentStudioVisits]
+  );
+  const activeOrders = useMemo(
+    () => currentStudioVisits
+      .filter(visit => visit.status === 'waiting' || visit.status === 'in_service')
+      .sort((a, b) => a.ts - b.ts),
+    [currentStudioVisits]
+  );
 
   useEffect(() => {
     if (currentUser?.role !== 'SUPER_ADMIN') {
@@ -332,11 +396,13 @@ export default function App() {
     let tipCredit = 0;
     let waiting = 0;
     let cancelled = 0;
+    let inService = 0;
     let countDone = 0;
     const by: Record<string, { n: number; sales: number; tips: number }> = {};
 
     vs.forEach(v => {
       if (v.status === 'waiting') waiting++;
+      else if (v.status === 'in_service') inService++;
       else if (v.status === 'cancelled') cancelled++;
       else if (v.status === 'done') {
         countDone++;
@@ -359,7 +425,7 @@ export default function App() {
       }
     });
 
-    return { n: countDone, sales, cash, credit, tips, tipCash, tipCredit, waiting, cancelled, by };
+    return { n: countDone, sales, cash, credit, tips, tipCash, tipCredit, waiting, inService, cancelled, by };
   };
 
   const reportStats = useMemo(() => computeStats(reportVisits), [reportVisits]);
@@ -393,8 +459,8 @@ export default function App() {
       showToast('Please enter your name.');
       return;
     }
-    if (ciPhone.replace(/\D/g, '').length < 10) {
-      showToast('Please enter a valid phone number.');
+    if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(ciPhone.replace(/\D/g, ''))) {
+      showToast('Enter a valid 10-digit US phone number.');
       return;
     }
     if (!selectedSvcs.length) {
@@ -437,7 +503,7 @@ export default function App() {
   // Save Billing & Mark Done (Pushes to MongoDB)
   const handleSaveBilling = async (vId: string) => {
     const draft = drafts[vId];
-    if (!draft) return;
+    if (!draft || updatingVisitId) return;
 
     const tip = parseFloat(String(draft.tip)) || 0;
 
@@ -452,13 +518,34 @@ export default function App() {
       tip: Math.round(tip * 100) / 100
     } as const;
 
-    const updated = await salonApi.updateVisit(vId, updates);
-    if (updated) {
-      setVisits(prev => prev.map(item => (item.id === vId ? updated : item)));
-      setOpenVisitId(null);
-      showToast('Client visit completed and recorded.');
-    } else {
-      showToast('Checkout was not saved. Please try again.');
+    setUpdatingVisitId(vId);
+    try {
+      const updated = await salonApi.updateVisit(vId, updates);
+      if (updated) {
+        setVisits(prev => prev.map(item => (item.id === vId ? updated : item)));
+        setOpenVisitId(null);
+        showToast('Client visit completed and recorded.');
+      } else {
+        showToast('Checkout was not saved. Please try again.');
+      }
+    } finally {
+      setUpdatingVisitId(null);
+    }
+  };
+
+  const handleStartService = async (visitId: string) => {
+    if (updatingVisitId) return;
+    setUpdatingVisitId(visitId);
+    try {
+      const updated = await salonApi.updateVisit(visitId, { status: 'in_service' });
+      if (updated) {
+        setVisits(previous => previous.map(visit => visit.id === visitId ? updated : visit));
+        showToast('Service started. Checkout is now available when finished.');
+      } else {
+        showToast('Could not start service. Refresh and try again.');
+      }
+    } finally {
+      setUpdatingVisitId(null);
     }
   };
 
@@ -850,13 +937,21 @@ export default function App() {
                   setReportLocs([0]);
                   setOpenVisitId(null);
                 }}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                className={`relative px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   loc === 0
-                    ? 'bg-[#B3315A] text-white shadow-xs font-bold'
+                    ? 'text-white shadow-xs font-bold'
                     : 'text-[#5B6875] hover:text-[#B3315A]'
                 }`}
               >
-                {locName(0)}
+                {loc === 0 && (
+                  <motion.span
+                    layoutId="active-location"
+                    aria-hidden="true"
+                    className="absolute inset-0 rounded-md bg-[#B3315A]"
+                    transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 36 }}
+                  />
+                )}
+                <span className="relative z-10">{locName(0)}</span>
               </button>
               <button
                 type="button"
@@ -865,35 +960,29 @@ export default function App() {
                   setReportLocs([1]);
                   setOpenVisitId(null);
                 }}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                className={`relative px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   loc === 1
-                    ? 'bg-[#B3315A] text-white shadow-xs font-bold'
+                    ? 'text-white shadow-xs font-bold'
                     : 'text-[#5B6875] hover:text-[#B3315A]'
                 }`}
               >
-                {locName(1)}
+                {loc === 1 && (
+                  <motion.span
+                    layoutId="active-location"
+                    aria-hidden="true"
+                    className="absolute inset-0 rounded-md bg-[#B3315A]"
+                    transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 36 }}
+                  />
+                )}
+                <span className="relative z-10">{locName(1)}</span>
               </button>
             </div>}
           </div>
         </header>
 
         {/* TABS NAVIGATION */}
-        {(
-          <nav className="flex items-center gap-1.5 overflow-x-auto pb-1 text-sm font-semibold">
-            {!currentUser && <button
-              type="button"
-              onClick={() => {
-                setTab('checkin');
-                setOpenVisitId(null);
-              }}
-              className={`px-4 py-2 rounded-lg transition-all cursor-pointer flex items-center gap-2 ${
-                tab === 'checkin'
-                  ? 'bg-[#B3315A] text-white shadow-xs'
-                  : 'bg-white text-[#5B6875] border border-[#D9DFE5] hover:text-[#16202A] hover:border-[#B3315A]/40'
-              }`}
-            >
-              Check-in
-            </button>}
+        {currentUser && (
+          <nav className="flex flex-wrap items-center gap-1.5 pb-1 text-sm font-semibold">
             {currentUser?.role === 'LOCATION_OPERATOR' && <button
               type="button"
               onClick={() => {
@@ -907,11 +996,11 @@ export default function App() {
               }`}
             >
               <span>Queue</span>
-              {waitingCount > 0 && (
+              {activeOrders.length > 0 && (
                 <span className={`px-2 py-0.5 text-xs font-bold rounded-full transition-colors ${
                   tab === 'queue' ? 'bg-white text-[#B3315A]' : 'bg-[#B3315A] text-white'
                 }`}>
-                  {waitingCount}
+                  {activeOrders.length}
                 </span>
               )}
             </button>}
@@ -949,12 +1038,28 @@ export default function App() {
                 <span>{label}</span>
               </button>
             ))}
+            <button
+              type="button"
+              onClick={handleRefreshData}
+              disabled={isRefreshing}
+              className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#D9DFE5] bg-white text-[#5B6875] hover:border-[#B3315A]/50 hover:text-[#B3315A] disabled:opacity-60 cursor-pointer"
+              aria-label="Refresh latest data"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing ? 'Refreshing' : 'Refresh'}
+            </button>
           </nav>
         )}
 
         {/* =================================================================== */}
         {/* VIEW 1: CHECK-IN (LANDING SCREEN) */}
         {/* =================================================================== */}
+        <motion.div
+          key={loc}
+          initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
+        >
         {!currentUser && tab === 'checkin' && (
           <div className="space-y-6">
             {/* Check-in Form Card */}
@@ -995,11 +1100,15 @@ export default function App() {
                     autoComplete="tel"
                     inputMode="tel"
                     required
+                    maxLength={14}
+                    pattern="\([2-9][0-9]{2}\) [2-9][0-9]{2}-[0-9]{4}"
+                    title="Enter a valid 10-digit US phone number."
                     value={ciPhone}
-                    onChange={e => setCiPhone(e.target.value)}
+                    onChange={e => setCiPhone(formatUsPhone(e.target.value))}
                     placeholder="(269) 555-0123"
                     className="w-full px-4 py-3 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-medium text-[#16202A] focus:outline-none focus:ring-2 focus:ring-[#B3315A]/30 focus:border-[#B3315A]"
                   />
+                  <p className="text-[11px] text-[#7A8692]">10-digit US number. Letters and extra digits are ignored.</p>
                 </div>
 
                 {/* Service Chips */}
@@ -1158,32 +1267,33 @@ export default function App() {
         {/* =================================================================== */}
         {tab === 'queue' && currentUser?.role === 'LOCATION_OPERATOR' && (
           <div className="space-y-6">
-            {/* Waiting Queue */}
+            {/* Active Orders */}
             <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 space-y-4 shadow-xs">
               <div className="flex items-center justify-between border-b border-[#D9DFE5] pb-3">
                 <h2 className="text-xl font-bold font-serif text-[#16202A]">
-                  Waiting at {locName(loc)}
+                  Active orders at {locName(loc)}
                 </h2>
                 <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#E9EDF1] text-[#5B6875]">
-                  {waitingCount} waiting
+                  {waitingCount} waiting · {inServiceCount} in service
                 </span>
               </div>
 
-              {waitingCount === 0 ? (
+              {activeOrders.length === 0 ? (
                 <div className="p-8 text-center text-sm text-[#5B6875] border border-dashed border-[#D9DFE5] rounded-lg">
-                  No one is waiting. New check-ins submitted on the Check-in tab appear here instantly.
+                  No active orders. New check-ins will appear here.
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {currentStudioVisits.filter(v => v.status === 'waiting').map((v, i) => {
+                  {activeOrders.map((v, i) => {
                     const isOpen = openVisitId === v.id;
                     const draft = drafts[v.id] || { pay: 'card', tip: 0 };
+                    const isInService = v.status === 'in_service';
 
                     return (
                       <article
                         key={v.id}
                         className={`border rounded-lg p-4 transition-all bg-white ${
-                          isOpen ? 'border-[#B3315A] ring-1 ring-[#B3315A]' : 'border-[#D9DFE5]'
+                          isOpen ? 'border-[#B3315A] ring-1 ring-[#B3315A]' : isInService ? 'border-teal-200' : 'border-[#D9DFE5]'
                         }`}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1194,9 +1304,18 @@ export default function App() {
                             <span className="font-bold text-base text-[#16202A]">{v.name}</span>
                             <span className="text-xs text-[#5B6875]">{v.phone}</span>
                           </div>
-                          <span className="text-xs text-[#5B6875] font-mono">
-                            Checked in {clock(v.ts)} · waiting {waitMin(v.ts)} min
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            {isInService && (
+                              <span className="px-2 py-1 rounded-full bg-teal-50 text-teal-800 font-bold">
+                                Service in progress
+                              </span>
+                            )}
+                            <span className="text-[#5B6875] font-mono">
+                              {isInService
+                                ? `Started ${clock(v.serviceStartedTs || v.ts)}`
+                                : `Checked in ${clock(v.ts)} · waiting ${waitMin(v.ts)} min`}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="flex flex-wrap gap-1.5 mt-2">
@@ -1213,7 +1332,7 @@ export default function App() {
                         )}
 
                         {/* Inline Billing Form */}
-                        {isOpen ? (
+                        {isOpen && isInService ? (
                           <div className="mt-4 pt-4 border-t border-dashed border-[#D9DFE5] space-y-4">
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                               <div>
@@ -1264,13 +1383,14 @@ export default function App() {
                             <p className="text-sm font-bold text-[#16202A]">
                               Final bill: {money(v.amount + (Number(draft.tip) || 0))}
                             </p>
-                            <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex flex-wrap items-center justify-end gap-2">
                               <button
                                 type="button"
                                 onClick={() => handleSaveBilling(v.id)}
-                                className="px-4 py-2 bg-[#B3315A] text-white text-xs font-bold rounded shadow-xs cursor-pointer"
+                                disabled={updatingVisitId === v.id}
+                                className="px-4 py-2 bg-[#B3315A] text-white text-xs font-bold rounded shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                               >
-                                Check out customer
+                                {updatingVisitId === v.id ? 'Saving...' : 'Complete checkout'}
                               </button>
                               <button
                                 type="button"
@@ -1282,14 +1402,30 @@ export default function App() {
                             </div>
                           </div>
                         ) : (
-                          <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-[#D9DFE5]/50">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenBilling(v)}
-                              className="px-3.5 py-1.5 bg-[#B3315A] text-white text-xs font-bold rounded shadow-xs hover:bg-[#9B254A] cursor-pointer"
-                            >
-                              Complete checkout
-                            </button>
+                          <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-[#D9DFE5]/50">
+                            <span className="text-xs text-[#5B6875]">
+                              {v.employee ? `Operator: ${v.employee}` : ''}
+                            </span>
+                            <div className="flex items-center gap-2 ml-auto">
+                              {!isInService ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartService(v.id)}
+                                  disabled={updatingVisitId === v.id}
+                                  className="px-3.5 py-1.5 bg-teal-700 text-white text-xs font-bold rounded shadow-xs hover:bg-teal-800 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+                                >
+                                  {updatingVisitId === v.id ? 'Starting...' : 'Start service'}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenBilling(v)}
+                                  className="px-3.5 py-1.5 bg-[#B3315A] text-white text-xs font-bold rounded shadow-xs hover:bg-[#9B254A] cursor-pointer"
+                                >
+                                  Complete checkout
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
                       </article>
@@ -1604,19 +1740,19 @@ export default function App() {
 
             {analyticsDateRange.from <= analyticsDateRange.to && (
               <>
-                <section className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7 gap-3">
+                <section className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
                   {[
                     { label: 'Total visits', value: analyticsScopedVisits.length, accent: 'text-[#16202A]' },
                     { label: 'Clients served', value: analyticsStats.n, accent: 'text-[#16202A]' },
                     { label: 'Service sales', value: money(analyticsStats.sales), accent: 'text-[#B3315A]' },
                     { label: 'Tips collected', value: money(analyticsStats.tips), accent: 'text-teal-800' },
-                    { label: 'Still waiting', value: analyticsStats.waiting, accent: 'text-amber-700' },
+                    { label: 'Open orders', value: analyticsStats.waiting + analyticsStats.inService, accent: 'text-amber-700' },
                     { label: 'Base salary deducted', value: money(analyticsSalaryExpense), accent: 'text-rose-700' },
                     { label: 'Profit after salary', value: money(analyticsProfitAfterSalary), accent: analyticsProfitAfterSalary < 0 ? 'text-rose-700' : 'text-emerald-800' }
                   ].map(metric => (
-                    <div key={metric.label} className="flex min-h-24 flex-col justify-between bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
+                    <div key={metric.label} className="flex min-h-24 min-w-0 flex-col justify-between overflow-hidden bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
-                      <span className={`block mt-2 text-xl sm:text-2xl font-extrabold font-mono tabular-nums ${metric.accent}`}>{metric.value}</span>
+                      <span className={`block mt-2 min-w-0 break-words text-lg sm:text-xl xl:text-2xl leading-tight font-extrabold font-mono tabular-nums ${metric.accent}`}>{metric.value}</span>
                     </div>
                   ))}
                 </section>
@@ -1827,9 +1963,9 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+            <div className="grid grid-cols-1 md:grid-cols-2 items-stretch gap-4">
               {/* Authentic Till Slip Receipt */}
-              <section className="slip shadow-sm space-y-2">
+              <section className="slip h-full min-w-0 shadow-sm space-y-2">
                 <div className="text-center font-bold text-base tracking-wide uppercase">
                   {reportLocationLabel}
                 </div>
@@ -1894,10 +2030,9 @@ export default function App() {
                 )}
               </section>
 
-              {/* Right Side: Employee breakdown & Close Day */}
-              <div className="space-y-4">
+              <div className="flex min-w-0 flex-col gap-4">
                 {/* Employee Breakdown Table */}
-                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
+                <section className="min-w-0 bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[#16202A]">
                     By Employee
                   </h3>
@@ -1933,7 +2068,7 @@ export default function App() {
                 </section>
 
                 {/* Close the Day Drawer Section */}
-                <section className="bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
+                <section className="min-w-0 bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[#16202A]">
                     Close the Day
                   </h3>
@@ -2162,7 +2297,7 @@ export default function App() {
                         </td>
                         <td className="py-2.5 px-2 text-right font-mono">{insight.orders}</td>
                         <td className="py-2.5 px-2 text-right font-mono">{insight.n}</td>
-                        <td className="py-2.5 px-2 text-right font-mono">{insight.waiting}</td>
+                        <td className="py-2.5 px-2 text-right font-mono">{insight.waiting + insight.inService}</td>
                         <td className="py-2.5 px-2 text-right font-mono">{insight.cancelled}</td>
                         <td className="py-2.5 px-2 text-right font-mono">{money(insight.sales)}</td>
                         <td className="py-2.5 px-2 text-right font-mono">{money(insight.tips)}</td>
@@ -2591,6 +2726,7 @@ export default function App() {
             </div>
           </section>
         )}
+        </motion.div>
 
         {/* =================================================================== */}
         {/* FOOTER: ADMIN / STAFF SIGN-IN AT THE VERY LAST */}

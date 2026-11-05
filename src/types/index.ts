@@ -21,12 +21,13 @@ export interface VisitItem {
   phone: string;
   services: string[];
   note: string;
-  status: 'waiting' | 'done' | 'cancelled';
+  status: 'waiting' | 'in_service' | 'done' | 'cancelled';
   amount: number;
   pay: 'cash' | 'card' | 'credit' | '';
   tip: number;
   employee: string;
   ts: number;
+  serviceStartedTs?: number;
   doneTs?: number;
 }
 
