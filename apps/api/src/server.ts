@@ -375,10 +375,14 @@ async function seedStaffCredential(account: StaffAccountConfig): Promise<void> {
   const password = account.password;
   if (!username || !password || /^(change-me|replace|placeholder)/i.test(password)) return;
 
-  const passwordHash = await hashPassword(password);
   if (account.role === 'SUPER_ADMIN') {
-    const existingAdmin = await StaffCredential.findOne({ role: 'SUPER_ADMIN' }).select('_id').lean();
+    const existingAdmin = await StaffCredential.findOne({ role: 'SUPER_ADMIN' })
+      .select('_id username passwordHash')
+      .lean();
     if (existingAdmin) {
+      const passwordHash = await verifyPassword(password, existingAdmin.passwordHash)
+        ? existingAdmin.passwordHash
+        : await hashPassword(password);
       await StaffCredential.updateOne(
         { _id: existingAdmin._id },
         {
@@ -395,6 +399,7 @@ async function seedStaffCredential(account: StaffAccountConfig): Promise<void> {
     }
   }
 
+  const passwordHash = await hashPassword(password);
   await StaffCredential.updateOne(
     { username },
     {
