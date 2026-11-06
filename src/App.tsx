@@ -26,6 +26,8 @@ import {
   Settings as SettingsIcon
 } from 'lucide-react';
 
+const CARD_FEE = 1;
+
 function dayStr(d?: Date): string {
   d = d || new Date();
   const m = d.getMonth() + 1;
@@ -130,6 +132,8 @@ export default function App() {
   // Queue Billing Drawer state
   const [openVisitId, setOpenVisitId] = useState<string | null>(null);
   const [updatingVisitId, setUpdatingVisitId] = useState<string | null>(null);
+  const [cancelingVisitId, setCancelingVisitId] = useState<string | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { pay: 'cash' | 'card'; tip: number | '' }>>({});
 
   // Closing Report state
@@ -374,6 +378,7 @@ export default function App() {
     let cash = 0;
     let credit = 0;
     let tips = 0;
+    let cardFees = 0;
     let tipCash = 0;
     let tipCredit = 0;
     let waiting = 0;
@@ -389,14 +394,16 @@ export default function App() {
       else if (v.status === 'done') {
         countDone++;
         const a = Number(v.amount) || 0;
+        const fee = Number(v.cardFee) || 0;
         const t = Number(v.tip) || 0;
         sales += a;
         tips += t;
+        cardFees += fee;
         if (v.pay === 'cash') {
           cash += a;
           tipCash += t;
         } else {
-          credit += a;
+          credit += a + fee;
           tipCredit += t;
         }
         const emp = v.employee || 'Unassigned';
@@ -407,7 +414,7 @@ export default function App() {
       }
     });
 
-    return { n: countDone, sales, cash, credit, tips, tipCash, tipCredit, waiting, inService, cancelled, by };
+    return { n: countDone, sales, cash, credit, cardFees, tips, tipCash, tipCredit, waiting, inService, cancelled, by };
   };
 
   const reportStats = useMemo(() => computeStats(reportVisits), [reportVisits]);
@@ -441,7 +448,7 @@ export default function App() {
       showToast('Please enter your name.');
       return;
     }
-    if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(ciPhone.replace(/\D/g, ''))) {
+    if (ciPhone.trim() && !/^[2-9]\d{2}[2-9]\d{6}$/.test(ciPhone.replace(/\D/g, ''))) {
       showToast('Enter a valid 10-digit US phone number.');
       return;
     }
@@ -477,7 +484,7 @@ export default function App() {
   const handleOpenBilling = (v: VisitItem) => {
     setDrafts(prev => ({
       ...prev,
-      [v.id]: { pay: v.pay === 'cash' ? 'cash' : 'card', tip: v.tip || 0 }
+      [v.id]: { pay: v.pay === 'card' ? 'card' : 'cash', tip: v.tip || 0 }
     }));
     setOpenVisitId(v.id);
   };
@@ -509,6 +516,30 @@ export default function App() {
         showToast('Client visit completed and recorded.');
       } else {
         showToast('Checkout was not saved. Please try again.');
+      }
+    } finally {
+      setUpdatingVisitId(null);
+    }
+  };
+
+  const handleCancelVisit = async (visitId: string) => {
+    const reason = cancellationReason.trim();
+    if (!reason) {
+      showToast('Enter a reason for cancelling this order.');
+      return;
+    }
+    if (updatingVisitId) return;
+
+    setUpdatingVisitId(visitId);
+    try {
+      const updated = await salonApi.updateVisit(visitId, { status: 'cancelled', cancellationReason: reason });
+      if (updated) {
+        setVisits(previous => previous.map(visit => visit.id === visitId ? updated : visit));
+        setCancelingVisitId(null);
+        setCancellationReason('');
+        showToast('Order cancelled and reason recorded.');
+      } else {
+        showToast('Cancellation was not saved. Refresh and try again.');
       }
     } finally {
       setUpdatingVisitId(null);
@@ -724,6 +755,7 @@ export default function App() {
       `Total sales: ${money(st.sales)}`,
       `Cash sales: ${money(st.cash)}`,
       `Card sales: ${money(st.credit)}`,
+      `Card fees: ${money(st.cardFees)}`,
       `Tips: ${money(st.tips)} (cash ${money(st.tipCash)}, card ${money(st.tipCredit)})`,
       ...Object.keys(st.by).map(k => `  ${k}: ${st.by[k].n} clients, ${money(st.by[k].sales)}, tips ${money(st.by[k].tips)}`),
       cl && cl.counted != null ? `Cash counted: ${money(cl.counted)} (expected ${money(st.cash + st.tipCash)})` : ''
@@ -1031,14 +1063,13 @@ export default function App() {
 
                 <div className="space-y-1.5">
                   <label htmlFor="phone-input" className="block text-xs font-bold uppercase tracking-wider text-[#5B6875]">
-                    Phone number
+                    Phone number (optional)
                   </label>
                   <input
                     id="phone-input"
                     type="tel"
                     autoComplete="tel"
                     inputMode="tel"
-                    required
                     maxLength={14}
                     pattern="\([2-9][0-9]{2}\) [2-9][0-9]{2}-[0-9]{4}"
                     title="Enter a valid 10-digit US phone number."
@@ -1047,7 +1078,7 @@ export default function App() {
                     placeholder="(269) 555-0123"
                     className="w-full px-4 py-3 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-sm font-medium text-[#16202A] focus:outline-none focus:ring-2 focus:ring-[#B3315A]/30 focus:border-[#B3315A]"
                   />
-                  <p className="text-[11px] text-[#7A8692]">10-digit US number. Letters and extra digits are ignored.</p>
+                  <p className="text-[11px] text-[#7A8692]">Optional. If provided, enter a valid 10-digit US number.</p>
                 </div>
 
                 {/* Service Chips */}
@@ -1225,7 +1256,7 @@ export default function App() {
                 <div className="space-y-3">
                   {activeOrders.map((v, i) => {
                     const isOpen = openVisitId === v.id;
-                    const draft = drafts[v.id] || { pay: 'card', tip: 0 };
+                    const draft = drafts[v.id] || { pay: 'cash', tip: 0 };
                     const isInService = v.status === 'in_service';
 
                     return (
@@ -1271,7 +1302,42 @@ export default function App() {
                         )}
 
                         {/* Inline Billing Form */}
-                        {isOpen && isInService ? (
+                        {cancelingVisitId === v.id ? (
+                          <div className="mt-4 pt-4 border-t border-dashed border-rose-200 space-y-3">
+                            <label htmlFor={`cancel-reason-${v.id}`} className="block text-xs font-bold text-rose-800">
+                              Reason for cancellation (required)
+                            </label>
+                            <textarea
+                              id={`cancel-reason-${v.id}`}
+                              value={cancellationReason}
+                              maxLength={500}
+                              onChange={event => setCancellationReason(event.target.value)}
+                              placeholder="For example: customer was not present"
+                              rows={2}
+                              className="w-full p-2 bg-white border border-rose-200 rounded text-sm"
+                            />
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCancelingVisitId(null);
+                                  setCancellationReason('');
+                                }}
+                                className="px-3 py-2 bg-white border border-[#D9DFE5] text-[#5B6875] text-xs font-semibold rounded cursor-pointer"
+                              >
+                                Back
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCancelVisit(v.id)}
+                                disabled={updatingVisitId === v.id || !cancellationReason.trim()}
+                                className="px-4 py-2 bg-rose-700 text-white text-xs font-bold rounded disabled:opacity-60 cursor-pointer"
+                              >
+                                {updatingVisitId === v.id ? 'Cancelling...' : 'Confirm cancellation'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : isOpen && isInService ? (
                           <div className="mt-4 pt-4 border-t border-dashed border-[#D9DFE5] space-y-4">
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                               <div>
@@ -1281,7 +1347,7 @@ export default function App() {
 
                               {/* Payment Method */}
                               <div>
-                                <label className="block text-xs font-bold text-[#5B6875] mb-1">Payment</label>
+                                <label className="block text-xs font-bold text-[#5B6875] mb-1">Payment method (customer choice)</label>
                                 <div className="flex gap-1">
                                   <button
                                     type="button"
@@ -1319,9 +1385,15 @@ export default function App() {
                               </div>
                             </div>
 
-                            <p className="text-sm font-bold text-[#16202A]">
-                              Final bill: {money(v.amount + (Number(draft.tip) || 0))}
-                            </p>
+                            <div className="space-y-1 text-sm">
+                              <p className="text-[#5B6875]">Service total: {money(v.amount)}</p>
+                              {draft.pay === 'card' && (
+                                <p className="text-[#5B6875]">Card fee: {money(CARD_FEE)}</p>
+                              )}
+                              <p className="font-bold text-[#16202A]">
+                                Final bill: {money(v.amount + (draft.pay === 'card' ? CARD_FEE : 0) + (Number(draft.tip) || 0))}
+                              </p>
+                            </div>
                             <div className="flex flex-wrap items-center justify-end gap-2">
                               <button
                                 type="button"
@@ -1364,6 +1436,18 @@ export default function App() {
                                   Complete checkout
                                 </button>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenVisitId(null);
+                                  setCancelingVisitId(v.id);
+                                  setCancellationReason('');
+                                }}
+                                disabled={updatingVisitId === v.id}
+                                className="px-3.5 py-1.5 bg-white text-rose-700 text-xs font-bold rounded border border-rose-200 hover:bg-rose-50 disabled:opacity-60 cursor-pointer"
+                              >
+                                Cancel order
+                              </button>
                             </div>
                           </div>
                         )}
@@ -1499,8 +1583,7 @@ export default function App() {
                 <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                   {[
                     { label: 'Completed visits', value: operatorAnalyticsStats.n, accent: 'text-[#16202A]' },
-                    { label: 'Service sales', value: money(operatorAnalyticsStats.sales), accent: 'text-[#B3315A]' },
-                    { label: 'Tips earned · selected range', value: money(operatorAnalyticsStats.tips), accent: 'text-teal-800' }
+                    { label: 'Service sales', value: money(operatorAnalyticsStats.sales), accent: 'text-[#B3315A]' }
                   ].map(metric => (
                     <div key={metric.label} className="bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
@@ -1512,7 +1595,7 @@ export default function App() {
                   <div>
                     <h3 className="font-bold text-base text-[#16202A]">Orders you completed</h3>
                     <p className="text-xs text-[#5B6875] mt-1">
-                      Completed orders checked out under your operator account during {analyticsDateRange.label.toLowerCase()}. Tips are included in the totals above.
+                      Completed orders checked out under your operator account during {analyticsDateRange.label.toLowerCase()}.
                     </p>
                   </div>
                   {operatorAnalyticsVisits.filter(visit => visit.status === 'done').length === 0 ? (
@@ -1547,7 +1630,7 @@ export default function App() {
                                 <td className="py-3 px-2 text-right font-mono text-teal-800">{money(visit.tip)}</td>
                                 <td className="py-3 px-2 text-right capitalize text-[#5B6875]">{visit.pay || '—'}</td>
                                 <td className="py-3 pl-2 text-right font-mono font-semibold text-[#16202A]">
-                                  {money(visit.amount + visit.tip)}
+                                  {money(visit.amount + (Number(visit.cardFee) || 0) + visit.tip)}
                                 </td>
                               </tr>
                             ))}
@@ -1849,6 +1932,12 @@ export default function App() {
                   <span>Card sales</span>
                   <span className="dots" />
                   <span className="font-mono">{money(reportStats.credit)}</span>
+                </div>
+
+                <div className="ln text-xs text-[#5B6875] pl-3">
+                  <span>Card fees included</span>
+                  <span className="dots" />
+                  <span className="font-mono">{money(reportStats.cardFees)}</span>
                 </div>
 
                 <div className="border-t-2 border-dashed border-[#D9DFE5] my-2" />
@@ -2155,7 +2244,7 @@ export default function App() {
                         <td className="py-2.5 px-2 text-right font-mono">{money(insight.sales)}</td>
                         <td className="py-2.5 px-2 text-right font-mono">{money(insight.tips)}</td>
                         <td className="py-2.5 pl-2 text-right font-mono font-bold text-[#B3315A]">
-                          {money(insight.sales + insight.tips)}
+                          {money(insight.sales + insight.cardFees + insight.tips)}
                         </td>
                       </tr>
                     ))}

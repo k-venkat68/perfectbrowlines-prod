@@ -97,7 +97,10 @@ export const salonApi = {
 
   async updateVisit(
     id: string,
-    updates: { status: 'in_service' } | { status: 'done'; tip: number; pay: 'cash' | 'card' }
+    updates:
+      | { status: 'in_service' }
+      | { status: 'done'; tip: number; pay: 'cash' | 'card' }
+      | { status: 'cancelled'; cancellationReason: string }
   ): Promise<VisitItem | null> {
     try {
       const res = await fetch(`/api/v1/visits/${id}`, {

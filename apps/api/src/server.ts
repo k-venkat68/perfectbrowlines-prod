@@ -41,12 +41,14 @@ export interface IVisitDoc {
   note: string;
   status: 'waiting' | 'in_service' | 'done' | 'cancelled';
   amount: number;
+  cardFee?: number;
   pay: 'cash' | 'card' | 'credit' | '';
   tip: number;
   employee: string;
   ts: number;
   serviceStartedTs?: number;
   doneTs?: number;
+  cancellationReason?: string;
 }
 
 const VisitSchema = new mongoose.Schema({
@@ -59,12 +61,14 @@ const VisitSchema = new mongoose.Schema({
   note: { type: String, default: '' },
   status: { type: String, enum: ['waiting', 'in_service', 'done', 'cancelled'], default: 'waiting', index: true },
   amount: { type: Number, default: 0 },
+  cardFee: { type: Number, default: 0 },
   pay: { type: String, enum: ['cash', 'card', 'credit', ''], default: '' },
   tip: { type: Number, default: 0 },
   employee: { type: String, default: '' },
   ts: { type: Number, default: () => Date.now() },
   serviceStartedTs: { type: Number },
-  doneTs: { type: Number }
+  doneTs: { type: Number },
+  cancellationReason: { type: String, default: '' }
 }, { timestamps: true, collection: 'visits' });
 VisitSchema.index({ loc: 1, date: 1, ts: 1 });
 VisitSchema.index({ date: 1, loc: 1, ts: 1 });
@@ -278,6 +282,7 @@ interface StaffSession {
 const staffSessions = new Map<string, StaffSession>();
 const SESSION_COOKIE = 'pbl_session';
 const SESSION_DURATION_MS = 12 * 60 * 60 * 1000;
+const CARD_FEE = 1;
 
 function getSession(req: express.Request): StaffSession | undefined {
   const cookie = req.headers.cookie?.split(';').map(part => part.trim())
@@ -796,7 +801,7 @@ app.post('/api/v1/visits', async (req, res) => {
   if (!normalizedName) {
     return res.status(400).json({ success: false, error: 'Name is required.' });
   }
-  if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(digitsOnlyPhone)) {
+  if (normalizedPhone && !/^[2-9]\d{2}[2-9]\d{6}$/.test(digitsOnlyPhone)) {
     return res.status(400).json({ success: false, error: 'Enter a valid 10-digit US phone number.' });
   }
   if (!Number.isInteger(selectedLocation) || (selectedLocation !== 0 && selectedLocation !== 1)) {
@@ -827,6 +832,7 @@ app.post('/api/v1/visits', async (req, res) => {
     note: typeof note === 'string' ? note.trim().slice(0, 500) : '',
     status: 'waiting',
     amount: Math.round(orderTotal * 100) / 100,
+    cardFee: 0,
     pay: '',
     tip: 0,
     employee: '',
@@ -854,7 +860,7 @@ app.put('/api/v1/visits/:id', async (req, res) => {
     return res.status(503).json({ success: false, error: 'MongoDB is unavailable. The order update was not saved.' });
   }
 
-  const { status, tip, pay } = req.body || {};
+  const { status, tip, pay, cancellationReason } = req.body || {};
   if (status === 'in_service') {
     if (Object.keys(req.body || {}).length !== 1) {
       return res.status(400).json({ success: false, error: 'Starting service only accepts a status update.' });
@@ -877,6 +883,32 @@ app.put('/api/v1/visits/:id', async (req, res) => {
     }
   }
 
+  if (status === 'cancelled') {
+    const reason = typeof cancellationReason === 'string' ? cancellationReason.trim() : '';
+    if (
+      Object.keys(req.body || {}).some(key => key !== 'status' && key !== 'cancellationReason') ||
+      !reason ||
+      reason.length > 500
+    ) {
+      return res.status(400).json({ success: false, error: 'Provide a cancellation reason of 1 to 500 characters.' });
+    }
+
+    try {
+      const updated = await Visit.findOneAndUpdate(
+        { id, loc: session.loc, status: { $in: ['waiting', 'in_service'] } },
+        { $set: { status: 'cancelled', cancellationReason: reason } },
+        { new: true, runValidators: true }
+      ).lean();
+      if (!updated) return res.status(404).json({ success: false, error: 'This open order was not found at your location.' });
+      const index = memoryVisits.findIndex(visit => visit.id === id);
+      if (index !== -1) memoryVisits[index] = { ...memoryVisits[index], ...updated } as IVisitDoc;
+      return res.json({ success: true, visit: updated, source: 'mongodb' });
+    } catch (err) {
+      console.error('[MongoDB visit cancellation error]:', err);
+      return res.status(500).json({ success: false, error: 'Could not cancel this order. Please try again.' });
+    }
+  }
+
   const numericTip = Number(tip);
   if (Object.keys(req.body || {}).some(key => key !== 'tip' && key !== 'pay' && key !== 'status')) {
     return res.status(400).json({ success: false, error: 'Operators may only set a tip and payment method.' });
@@ -893,6 +925,7 @@ app.put('/api/v1/visits/:id', async (req, res) => {
         $set: {
           status: 'done',
           tip: Math.round(numericTip * 100) / 100,
+          cardFee: pay === 'card' ? CARD_FEE : 0,
           pay,
           doneTs: Date.now()
         }
@@ -1046,7 +1079,7 @@ app.put('/api/v1/settings/services/:name/price/:location', async (req, res) => {
     if (!settings) {
       return res.status(404).json({ success: false, error: 'Shop settings were not found.' });
     }
-    const service = settings.services.find(item => item.n === name);
+    const service = settings.services.find((item: IShopService) => item.n === name);
     if (!service) {
       return res.status(404).json({ success: false, error: 'Service was not found. Refresh settings and try again.' });
     }

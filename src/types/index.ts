@@ -23,12 +23,14 @@ export interface VisitItem {
   note: string;
   status: 'waiting' | 'in_service' | 'done' | 'cancelled';
   amount: number;
+  cardFee?: number;
   pay: 'cash' | 'card' | 'credit' | '';
   tip: number;
   employee: string;
   ts: number;
   serviceStartedTs?: number;
   doneTs?: number;
+  cancellationReason?: string;
 }
 
 export interface ClosingRecord {
