@@ -1084,10 +1084,13 @@ app.put('/api/v1/settings/services/:name/price/:location', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Service was not found. Refresh settings and try again.' });
     }
 
-    service.locationPrices = {
-      ...service.locationPrices,
-      [String(location)]: Math.round(price * 100) / 100
-    };
+    const locationPrices = { ...service.locationPrices };
+    const otherLocation = location === 0 ? 1 : 0;
+    if (locationPrices[String(otherLocation)] === undefined) {
+      locationPrices[String(otherLocation)] = service.p;
+    }
+    locationPrices[String(location)] = Math.round(price * 100) / 100;
+    service.locationPrices = locationPrices;
     settings.markModified('services');
     const saved = await settings.save();
     memorySettings = {
