@@ -191,6 +191,13 @@ export default function App() {
   const locName = (i: number): string => settings.locations[i] || (i === 1 ? 'Jackson' : 'Battle Creek');
   const servicePrice = (service: ShopSettings['services'][number], location: number): number =>
     service.locationPrices?.[String(location)] ?? service.p;
+  const selectLocation = (location: number) => {
+    setLoc(location);
+    setReportLocs([location]);
+    setServicePriceLocation(location);
+    setAnalyticsLocation(location === 0 ? '0' : '1');
+    setOpenVisitId(null);
+  };
 
   // Load initial data & connect with MongoDB
   const loadData = async (): Promise<boolean> => {
@@ -234,7 +241,7 @@ export default function App() {
     loadData();
     const interval = setInterval(loadData, 10000);
     return () => clearInterval(interval);
-  }, [today, currentUser]);
+  }, [today, currentUser, loc]);
 
   useEffect(() => {
     salonApi.fetchSession().then(user => {
@@ -896,11 +903,7 @@ export default function App() {
             {currentUser?.role !== 'LOCATION_OPERATOR' && <div className="inline-flex bg-[#E9EDF1] p-1 rounded-lg border border-[#D9DFE5]">
               <button
                 type="button"
-                onClick={() => {
-                  setLoc(0);
-                  setReportLocs([0]);
-                  setOpenVisitId(null);
-                }}
+                onClick={() => selectLocation(0)}
                 className={`relative px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   loc === 0
                     ? 'text-white shadow-xs font-bold'
@@ -919,11 +922,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setLoc(1);
-                  setReportLocs([1]);
-                  setOpenVisitId(null);
-                }}
+                onClick={() => selectLocation(1)}
                 className={`relative px-3 py-1.5 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                   loc === 1
                     ? 'text-white shadow-xs font-bold'
