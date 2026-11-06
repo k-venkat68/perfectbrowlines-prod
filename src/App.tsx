@@ -1141,9 +1141,6 @@ export default function App() {
                   >
                     {isCheckingIn ? 'Placing order...' : 'Place order & check in'}
                   </button>
-                  <span className="text-xs text-[#5B6875] font-medium">
-                    {waitingCount > 0 ? `${waitingCount} waiting ahead of you` : 'No one is waiting right now'}
-                  </span>
                 </div>
               </form>
             </section>
