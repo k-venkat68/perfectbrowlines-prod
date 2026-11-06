@@ -70,6 +70,17 @@
   min-width: 12px;
 }
 
+table.complete-grid {
+  border: 1px solid #D9DFE5;
+  border-collapse: collapse;
+}
+
+table.complete-grid th,
+table.complete-grid td {
+  border: 1px solid #D9DFE5;
+  text-align: left;
+}
+
 @media print {
   @page {
     size: landscape;

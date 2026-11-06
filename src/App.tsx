@@ -1186,7 +1186,7 @@ export default function App() {
 
               {/* Comparison Table */}
               <div className="overflow-x-auto border border-[#D9DFE5] rounded-lg">
-                <table className="w-full text-left text-xs">
+                <table className="complete-grid w-full text-left text-xs">
                   <thead className="bg-[#F2F4F6] border-b border-[#D9DFE5] text-[#5B6875] uppercase font-bold tracking-wider">
                     <tr>
                       <th className="py-2.5 px-4">Feature</th>
@@ -1580,7 +1580,7 @@ export default function App() {
 
             {analyticsDateRange.from <= analyticsDateRange.to && (
               <>
-                <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                <section className="mx-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {[
                     { label: 'Completed visits', value: operatorAnalyticsStats.n, accent: 'text-[#16202A]' },
                     { label: 'Service sales', value: money(operatorAnalyticsStats.sales), accent: 'text-[#B3315A]' }
@@ -1604,7 +1604,7 @@ export default function App() {
                     </p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[720px] text-left text-xs">
+                      <table className="complete-grid w-full min-w-[720px] text-xs">
                         <thead>
                           <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
                             <th className="py-2 pr-3">Date &amp; time</th>
@@ -1813,7 +1813,7 @@ export default function App() {
                     <p className="py-5 text-center text-sm text-[#5B6875]">No completed visits in this period.</p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[480px] text-left text-xs">
+                      <table className="complete-grid w-full min-w-[480px] text-xs">
                         <thead>
                           <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
                             <th className="py-2 pr-3">Staff member</th>
@@ -1982,7 +1982,7 @@ export default function App() {
                     <p className="text-xs text-[#5B6875]">No finished treatments for this date.</p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs">
+                      <table className="complete-grid w-full text-xs">
                         <thead>
                           <tr className="border-b border-[#D9DFE5] text-[#5B6875] font-bold">
                             <th className="py-2">Employee</th>
@@ -2213,7 +2213,7 @@ export default function App() {
                 </p>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-left text-xs">
+                <table className="complete-grid w-full min-w-[760px] text-xs">
                   <thead>
                     <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
                       <th className="py-2 pr-3">Period</th>
