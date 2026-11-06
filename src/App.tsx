@@ -1593,7 +1593,7 @@ export default function App() {
                     { label: 'Completed visits', value: operatorAnalyticsStats.n, accent: 'text-[#16202A]' },
                     { label: 'Service sales', value: money(operatorAnalyticsStats.sales), accent: 'text-[#B3315A]' }
                   ].map(metric => (
-                    <div key={metric.label} className="bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
+                    <div key={metric.label} className="bg-white border border-[#D9DFE5] rounded-xl p-4 text-center shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
                       <span className={`block mt-1 text-2xl font-extrabold font-mono ${metric.accent}`}>{metric.value}</span>
                     </div>
@@ -1755,7 +1755,7 @@ export default function App() {
                     { label: 'Tips collected', value: money(analyticsStats.tips), accent: 'text-teal-800' },
                     { label: 'Open orders', value: analyticsStats.waiting + analyticsStats.inService, accent: 'text-amber-700' }
                   ].map(metric => (
-                    <div key={metric.label} className="flex min-h-24 min-w-0 flex-col justify-between overflow-hidden bg-white border border-[#D9DFE5] rounded-xl p-4 shadow-xs">
+                    <div key={metric.label} className="flex min-h-24 min-w-0 flex-col justify-between overflow-hidden bg-white border border-[#D9DFE5] rounded-xl p-4 text-center shadow-xs">
                       <span className="block text-[10px] uppercase tracking-wider text-[#5B6875] font-bold">{metric.label}</span>
                       <span className={`block mt-2 min-w-0 break-words text-lg sm:text-xl xl:text-2xl leading-tight font-extrabold font-mono tabular-nums ${metric.accent}`}>{metric.value}</span>
                     </div>
@@ -2153,15 +2153,15 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
+                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg text-center">
                   <span className="text-[10px] uppercase tracking-wider text-[#5B6875] font-bold block">Clients Served</span>
                   <span className="text-3xl font-extrabold text-[#16202A] font-mono tabular-nums">{todayAllStats.n}</span>
                 </div>
-                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
+                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg text-center">
                   <span className="text-[10px] uppercase tracking-wider text-[#5B6875] font-bold block">Total Sales</span>
                   <span className="text-3xl font-extrabold text-[#B3315A] font-mono tabular-nums">{money(todayAllStats.sales)}</span>
                 </div>
-                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
+                <div className="flex min-h-24 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg text-center">
                   <span className="text-[10px] uppercase tracking-wider text-[#5B6875] font-bold block">Specialist Tips</span>
                   <span className="text-3xl font-extrabold text-teal-800 font-mono tabular-nums">{money(todayAllStats.tips)}</span>
                 </div>
@@ -2333,12 +2333,12 @@ export default function App() {
                 <p className="text-xs text-[#5B6875] mt-1">Completed service sales and estimated operating costs for the last 7 days.</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg">
+                <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] rounded-lg text-center">
                   <span className="text-[10px] uppercase font-bold text-[#5B6875]">Gross service sales · last 7 days</span>
                   <span className="text-2xl font-bold font-mono tabular-nums text-[#16202A]">{money(overviewPnl.grossSales)}</span>
                   <span className="text-[10px] text-[#5B6875]">{overviewPnl.completedCount} completed treatments</span>
                 </div>
-                <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg">
+                <div className="flex min-h-28 flex-col justify-between p-4 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-center">
                   <span className="text-[10px] uppercase font-bold text-[#5B6875]">Operating-cost estimate · 15%</span>
                   <span className="text-2xl font-bold font-mono tabular-nums text-[#5B6875]">{money(overviewPnl.operatingCostEstimate)}</span>
                   <span className="text-[10px] text-[#5B6875]">Estimate only</span>
