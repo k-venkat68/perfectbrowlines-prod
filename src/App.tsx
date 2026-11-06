@@ -146,6 +146,8 @@ export default function App() {
 
   // Settings edit state
   const [staffText, setStaffText] = useState<string>('');
+  const staffTextDirtyRef = useRef(false);
+  const [isSavingStaff, setIsSavingStaff] = useState(false);
   const [serviceNameDraft, setServiceNameDraft] = useState('');
   const [servicePriceDraft, setServicePriceDraft] = useState('');
   const [servicePriceDrafts, setServicePriceDrafts] = useState<Record<string, string>>({});
@@ -201,7 +203,7 @@ export default function App() {
       if (s) {
         setSettings(s.settings);
         setPricingLocked(s.pricingLocked);
-        setStaffText(s.settings.staff.join('\n'));
+        if (!staffTextDirtyRef.current) setStaffText(s.settings.staff.join('\n'));
       } else {
         setPricingLocked(true);
       }
@@ -636,7 +638,16 @@ export default function App() {
       services: settings.services
     };
 
-    if (await persistSettings(updated)) showToast('Staff settings saved successfully.');
+    setIsSavingStaff(true);
+    try {
+      if (await persistSettings(updated)) {
+        staffTextDirtyRef.current = false;
+        setStaffText(staff.join('\n'));
+        showToast('Staff settings saved successfully.');
+      }
+    } finally {
+      setIsSavingStaff(false);
+    }
   };
 
   const handleSaveService = async (event: React.FormEvent) => {
@@ -2416,7 +2427,10 @@ export default function App() {
                 <textarea
                   rows={4}
                   value={staffText}
-                  onChange={e => setStaffText(e.target.value)}
+                  onChange={e => {
+                    staffTextDirtyRef.current = true;
+                    setStaffText(e.target.value);
+                  }}
                   className="w-full p-3 bg-[#F2F4F6] border border-[#D9DFE5] rounded-lg text-xs font-medium"
                 />
               </div>
@@ -2424,9 +2438,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleSaveSettings}
-                className="px-5 py-2.5 bg-[#B3315A] text-white text-xs font-bold rounded-lg cursor-pointer hover:bg-[#9B254A]"
+                disabled={isSavingStaff}
+                className="px-5 py-2.5 bg-[#B3315A] text-white text-xs font-bold rounded-lg cursor-pointer hover:bg-[#9B254A] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Save Staff Settings
+                {isSavingStaff ? 'Saving…' : 'Save Staff Settings'}
               </button>
             </div>
           </section>
