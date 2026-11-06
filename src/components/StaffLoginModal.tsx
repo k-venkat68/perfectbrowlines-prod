@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { SalonUser } from '../types';
-import { Lock, X } from 'lucide-react';
+import { ArrowRight, LockKeyhole, ShieldCheck, UserRound, X } from 'lucide-react';
 import { salonApi } from '../api/salonApi';
 
 interface StaffLoginModalProps {
@@ -21,85 +21,119 @@ export const StaffLoginModal: React.FC<StaffLoginModalProps> = ({ isOpen, onClos
     event.preventDefault();
     setError('');
     setIsSigningIn(true);
-    const result = await salonApi.login(username, password);
-    setIsSigningIn(false);
-    if ('error' in result) {
-      setError(result.error);
-      return;
+    try {
+      const result = await salonApi.login(username, password);
+      if ('error' in result) {
+        setError(result.error);
+        return;
+      }
+      setPassword('');
+      onSelectUser(result.user);
+      onClose();
+    } finally {
+      setIsSigningIn(false);
     }
-    setPassword('');
-    onSelectUser(result.user);
-    onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white border border-[#E8E3DC] rounded-sm max-w-md w-full p-8 shadow-2xl relative">
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close sign-in"
-          className="absolute top-6 right-6 text-[#7A7571] hover:text-[#1A1A1A] cursor-pointer"
-        >
-          <X className="w-5 h-5" />
-        </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#171411]/70 p-4 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="staff-login-title"
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-[#E8E3DC] bg-white shadow-[0_28px_90px_rgba(0,0,0,0.32)]"
+      >
+        <div className="relative overflow-hidden bg-gradient-to-br from-[#24211E] via-[#1A1A1A] to-[#11100F] px-8 pb-7 pt-8 text-center">
+          <div className="absolute -right-10 -top-16 h-44 w-44 rounded-full border border-[#C5A880]/15" />
+          <div className="absolute -right-3 -top-9 h-32 w-32 rounded-full border border-[#C5A880]/10" />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close sign-in"
+            className="absolute right-5 top-5 z-10 rounded-full p-2 text-white/60 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C5A880] cursor-pointer"
+          >
+            <X className="h-4 w-4" />
+          </button>
 
-        <div className="text-center mb-6">
-          <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center">
-            <Lock className="w-5 h-5 text-[#C5A880]" />
+          <div className="relative mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-[#C5A880]/40 bg-[#C5A880]/10 shadow-[0_0_30px_rgba(197,168,128,0.12)]">
+            <LockKeyhole className="h-5 w-5 text-[#D8BD96]" strokeWidth={1.6} />
           </div>
-          <span className="text-[10px] uppercase tracking-[0.2em] text-[#C5A880] font-bold block mb-1">
-            Authorized Personnel Only
+          <span className="relative block text-[10px] font-bold uppercase tracking-[0.24em] text-[#D8BD96]">
+            Perfect Browlines · Private Access
           </span>
-          <h2 className="text-2xl font-serif text-[#1A1A1A]">Staff Portal</h2>
-          <p className="text-xs text-[#7A7571] mt-1">
-            Sign in with your studio operator or administrator account.
+          <h2 id="staff-login-title" className="mt-2 font-serif text-3xl text-white">
+            Staff Portal
+          </h2>
+          <p className="mx-auto mt-2 max-w-xs text-xs leading-relaxed text-white/60">
+            Sign in to your studio operator or administrator account.
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="staff-username" className="block text-xs font-semibold text-[#4A4643] mb-1">
-              Username
-            </label>
-            <input
-              id="staff-username"
-              type="text"
-              autoComplete="username"
-              required
-              value={username}
-              onChange={event => setUsername(event.target.value)}
-              className="w-full px-3 py-2.5 border border-[#E8E3DC] rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-[#C5A880]/40"
-            />
-          </div>
-          <div>
-            <label htmlFor="staff-password" className="block text-xs font-semibold text-[#4A4643] mb-1">
-              Password
-            </label>
-            <input
-              id="staff-password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={event => setPassword(event.target.value)}
-              className="w-full px-3 py-2.5 border border-[#E8E3DC] rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-[#C5A880]/40"
-            />
-          </div>
-          {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-          <button
-            type="submit"
-            disabled={isSigningIn}
-            className="w-full py-2.5 bg-[#1A1A1A] hover:bg-[#2C2926] text-white text-sm font-semibold rounded-sm disabled:opacity-60 cursor-pointer"
-          >
-            {isSigningIn ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
+        <div className="px-8 pb-7 pt-7 sm:px-9">
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label htmlFor="staff-username" className="mb-2 block text-[11px] font-bold uppercase tracking-[0.12em] text-[#625B54]">
+                Username
+              </label>
+              <div className="relative">
+                <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A49A8F]" />
+                <input
+                  id="staff-username"
+                  type="text"
+                  autoComplete="username"
+                  autoFocus
+                  required
+                  value={username}
+                  onChange={event => setUsername(event.target.value)}
+                  className="w-full rounded-lg border border-[#E7E0D7] bg-[#FCFBF9] py-3 pl-10 pr-3 text-sm text-[#1A1A1A] outline-none transition focus:border-[#B99A6B] focus:bg-white focus:ring-4 focus:ring-[#C5A880]/15"
+                />
+              </div>
+            </div>
+            <div>
+              <label htmlFor="staff-password" className="mb-2 block text-[11px] font-bold uppercase tracking-[0.12em] text-[#625B54]">
+                Password
+              </label>
+              <div className="relative">
+                <LockKeyhole className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#A49A8F]" />
+                <input
+                  id="staff-password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  className="w-full rounded-lg border border-[#E7E0D7] bg-[#FCFBF9] py-3 pl-10 pr-3 text-sm text-[#1A1A1A] outline-none transition focus:border-[#B99A6B] focus:bg-white focus:ring-4 focus:ring-[#C5A880]/15"
+                />
+              </div>
+            </div>
+            {error && (
+              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-800">
+                {error}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={isSigningIn}
+              className="group flex w-full items-center justify-center gap-2 rounded-lg bg-[#1A1A1A] py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#302A24] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#C5A880]/30 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+            >
+              {isSigningIn ? 'Signing in…' : 'Sign in securely'}
+              {!isSigningIn && <ArrowRight className="h-4 w-4 text-[#D8BD96] transition-transform group-hover:translate-x-0.5" />}
+            </button>
+          </form>
 
-        <div className="pt-4 mt-5 border-t border-[#F5F1EB] flex justify-end">
-          <button type="button" onClick={onClose} className="text-xs text-[#7A7571] hover:text-[#1A1A1A] cursor-pointer">
-            Back to customer check-in
-          </button>
+          <div className="mt-6 flex items-center justify-center gap-1.5 border-t border-[#F0ECE6] pt-5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#978D82]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#B99A6B]" />
+            Authorized studio personnel only
+          </div>
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-xs font-medium text-[#81786F] transition-colors hover:text-[#1A1A1A] focus-visible:outline-none focus-visible:underline cursor-pointer"
+            >
+              Back to customer check-in
+            </button>
+          </div>
         </div>
       </div>
     </div>
