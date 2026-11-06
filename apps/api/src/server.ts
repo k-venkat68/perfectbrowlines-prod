@@ -56,7 +56,7 @@ const VisitSchema = new mongoose.Schema({
   loc: { type: Number, required: true, index: true },
   date: { type: String, required: true, index: true },
   name: { type: String, required: true },
-  phone: { type: String, required: true },
+  phone: { type: String, default: '' },
   services: [{ type: String }],
   note: { type: String, default: '' },
   status: { type: String, enum: ['waiting', 'in_service', 'done', 'cancelled'], default: 'waiting', index: true },

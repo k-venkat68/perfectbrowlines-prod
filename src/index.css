@@ -78,7 +78,14 @@ table.complete-grid {
 table.complete-grid th,
 table.complete-grid td {
   border: 1px solid #D9DFE5;
+}
+
+table.complete-grid th {
   text-align: left;
+}
+
+table.complete-grid td {
+  text-align: center;
 }
 
 @media print {
