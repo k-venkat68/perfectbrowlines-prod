@@ -353,6 +353,12 @@ export default function App() {
       .sort((a, b) => a.ts - b.ts),
     [currentStudioVisits]
   );
+  const cancelledOrders = useMemo(
+    () => currentStudioVisits
+      .filter(visit => visit.status === 'cancelled')
+      .sort((a, b) => b.ts - a.ts),
+    [currentStudioVisits]
+  );
 
   useEffect(() => {
     if (currentUser?.role !== 'SUPER_ADMIN') {
@@ -776,6 +782,10 @@ export default function App() {
       `Card fees: ${money(st.cardFees)}`,
       `Tips: ${money(st.tips)} (cash ${money(st.tipCash)}, card ${money(st.tipCredit)})`,
       ...Object.keys(st.by).map(k => `  ${k}: ${st.by[k].n} clients, ${money(st.by[k].sales)}, tips ${money(st.by[k].tips)}`),
+      'Client records:',
+      ...reportVisits.map(visit =>
+        `  ${visit.name} · ${visit.phone || 'No phone'} · ${visit.status}${visit.status === 'cancelled' ? ` · Reason: ${visit.cancellationReason || 'Not recorded'}` : ''}`
+      ),
       cl && cl.counted != null ? `Cash counted: ${money(cl.counted)} (expected ${money(st.cash + st.tipCash)})` : ''
     ].filter(Boolean);
 
@@ -1465,6 +1475,41 @@ export default function App() {
               )}
             </section>
 
+            {/* Cancelled Orders History */}
+            <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 space-y-4 shadow-xs">
+              <div className="flex items-center justify-between border-b border-[#D9DFE5] pb-3">
+                <h3 className="text-lg font-bold font-serif text-[#16202A]">
+                  Cancelled Orders Today at {locName(loc)}
+                </h3>
+                <span className="text-xs text-rose-700 font-semibold">
+                  {cancelledOrders.length} cancelled
+                </span>
+              </div>
+              {cancelledOrders.length === 0 ? (
+                <div className="p-6 text-center text-xs text-[#5B6875] border border-dashed border-[#D9DFE5] rounded-lg">
+                  No cancelled orders today.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {cancelledOrders.map(visit => (
+                    <article key={visit.id} className="p-3 bg-rose-50 rounded-lg text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <strong className="text-sm text-[#16202A]">{visit.name}</strong>
+                          <span className="ml-2 font-mono text-[#5B6875]">{visit.phone || 'No phone provided'}</span>
+                        </div>
+                        <span className="font-mono text-[#5B6875]">{clock(visit.ts)}</span>
+                      </div>
+                      <p className="mt-1 text-[#5B6875]">{visit.services.join(', ')}</p>
+                      <p className="mt-1 font-semibold text-rose-800">
+                        Reason: {visit.cancellationReason || 'No reason recorded'}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
             {/* Served Today List */}
             <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 space-y-4 shadow-xs">
               <div className="flex items-center justify-between border-b border-[#D9DFE5] pb-3">
@@ -1615,6 +1660,8 @@ export default function App() {
                         <thead>
                           <tr className="border-b border-[#D9DFE5] text-[#5B6875] uppercase tracking-wide">
                             <th className="py-2 pr-3">Date &amp; time</th>
+                            <th className="py-2 px-2">Client</th>
+                            <th className="py-2 px-2">Phone</th>
                             <th className="py-2 px-2">Services</th>
                             <th className="py-2 px-2 text-right">Service total</th>
                             <th className="py-2 px-2 text-right">Tip</th>
@@ -1632,6 +1679,8 @@ export default function App() {
                                   <span className="font-semibold text-[#16202A]">{visit.date}</span>
                                   <span className="block text-[10px] text-[#7A8692]">{clock(visit.ts)}</span>
                                 </td>
+                                <td className="py-3 px-2 font-semibold text-[#16202A]">{visit.name}</td>
+                                <td className="py-3 px-2 text-[#5B6875]">{visit.phone || '—'}</td>
                                 <td className="py-3 px-2 text-[#5B6875]">{visit.services.join(', ')}</td>
                                 <td className="py-3 px-2 text-right font-mono">{money(visit.amount)}</td>
                                 <td className="py-3 px-2 text-right font-mono text-teal-800">{money(visit.tip)}</td>
@@ -1980,6 +2029,41 @@ export default function App() {
               </section>
 
               <div className="flex min-w-0 flex-col gap-4">
+                <section className="min-w-0 bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
+                  <div>
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-[#16202A]">Client records</h3>
+                    <p className="text-xs text-[#5B6875] mt-1">All orders for {longDay(reportDate)}, including cancellations.</p>
+                  </div>
+                  {reportVisits.length === 0 ? (
+                    <p className="text-xs text-[#5B6875]">No client records for this date.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="complete-grid w-full min-w-[560px] text-xs">
+                        <thead>
+                          <tr className="border-b border-[#D9DFE5] text-left text-[#5B6875] uppercase tracking-wide">
+                            <th className="py-2 pr-3">Client</th>
+                            <th className="py-2 px-2">Phone</th>
+                            <th className="py-2 px-2">Status</th>
+                            <th className="py-2 pl-2">Cancellation reason</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E9EDF1]">
+                          {reportVisits.map(visit => (
+                            <tr key={visit.id}>
+                              <td className="py-2 pr-3 font-semibold text-[#16202A]">{visit.name}</td>
+                              <td className="py-2 px-2 text-[#5B6875]">{visit.phone || '—'}</td>
+                              <td className="py-2 px-2 capitalize text-[#5B6875]">{visit.status.replace('_', ' ')}</td>
+                              <td className="py-2 pl-2 text-rose-800">
+                                {visit.status === 'cancelled' ? visit.cancellationReason || 'No reason recorded' : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+
                 {/* Employee Breakdown Table */}
                 <section className="min-w-0 bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-[#16202A]">
@@ -2629,7 +2713,10 @@ export default function App() {
           </div>
 
           <p className="text-[11px] text-[#5B6875]">
-            Perfect Browlines · 5462 Beckley Rd, Battle Creek, MI &amp; 1850 W Michigan Ave, Jackson, MI
+            Served more than a decade in Battle Creek and Jackson area.
+          </p>
+          <p className="text-[11px] text-[#5B6875]">
+            Perfect Browlines · 5775 Beckley Rd, Battle Creek, MI &amp; 1850 W Michigan Ave, Jackson, MI
           </p>
         </footer>
       </div>
