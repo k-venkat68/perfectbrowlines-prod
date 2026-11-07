@@ -50,11 +50,6 @@ function addMonths(s: string, n: number): string {
   return dayStr(new Date(targetYear, normalizedMonth, targetDay));
 }
 
-function dayLabel(s: string): string {
-  const d = new Date(s + 'T00:00:00');
-  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
-}
-
 function longDay(s: string): string {
   const d = new Date(s + 'T00:00:00');
   return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -792,28 +787,6 @@ export default function App() {
     navigator.clipboard.writeText(lines.join('\n'));
     showToast('Till summary copied to clipboard.');
   };
-
-  // 7-Day Chart Calculation for Owner Dashboard
-  const past7Days = useMemo(() => {
-    const arr: string[] = [];
-    for (let i = -6; i <= 0; i++) arr.push(addDays(today, i));
-    return arr;
-  }, [today]);
-
-  const salesByDay = useMemo(() => {
-    let max = 0;
-    const map: Record<string, [number, number]> = {};
-
-    past7Days.forEach(d => {
-      const dayVs = d === today ? visits : weekVisits.filter(v => v.date === d);
-      const bc = computeStats(dayVs.filter(v => v.loc === 0)).sales;
-      const jk = computeStats(dayVs.filter(v => v.loc === 1)).sales;
-      max = Math.max(max, bc, jk);
-      map[d] = [bc, jk];
-    });
-
-    return { map, max: Math.max(max, 100) };
-  }, [past7Days, visits, weekVisits, today]);
 
   // Overall Today Stats
   const todayAllStats = useMemo(() => computeStats(visits), [visits]);
@@ -2298,6 +2271,114 @@ export default function App() {
 
             <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
               <div className="border-b border-[#D9DFE5] pb-3">
+                <h3 className="font-bold text-base text-[#16202A]">Today&apos;s client activity</h3>
+                <p className="text-xs text-[#5B6875] mt-1">
+                  Active orders, cancelled orders, and completed checkouts at both studios.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                {[0, 1].map(location => {
+                  const locationVisits = visits.filter(visit => visit.loc === location);
+                  const active = locationVisits
+                    .filter(visit => visit.status === 'waiting' || visit.status === 'in_service')
+                    .sort((a, b) => a.ts - b.ts);
+                  const cancelled = locationVisits
+                    .filter(visit => visit.status === 'cancelled')
+                    .sort((a, b) => b.ts - a.ts);
+                  const served = locationVisits
+                    .filter(visit => visit.status === 'done')
+                    .sort((a, b) => a.ts - b.ts);
+
+                  return (
+                    <div key={location} className="border border-[#D9DFE5] rounded-lg p-4 space-y-4">
+                      <h4 className="font-bold text-sm text-[#16202A]">{locName(location)} Studio</h4>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h5 className="text-xs font-bold text-[#5B6875] uppercase">Active orders</h5>
+                          <span className="text-[11px] text-[#5B6875]">{active.length}</span>
+                        </div>
+                        {active.length === 0 ? (
+                          <p className="text-xs text-[#7A8692]">No active orders.</p>
+                        ) : active.map(visit => (
+                          <article key={visit.id} className="p-3 bg-[#F2F4F6] rounded-lg text-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <strong className="text-sm text-[#16202A]">{visit.name}</strong>
+                                <span className="ml-2 font-mono text-[#5B6875]">{visit.phone || 'No phone provided'}</span>
+                              </div>
+                              <span className="font-mono text-[#5B6875]">{clock(visit.ts)}</span>
+                            </div>
+                            <p className="mt-1 text-[#5B6875]">{visit.services.join(', ')}</p>
+                            <span className={`inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              visit.status === 'in_service' ? 'bg-teal-100 text-teal-800' : 'bg-amber-100 text-amber-900'
+                            }`}>
+                              {visit.status === 'in_service' ? 'In service' : 'Waiting'}
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h5 className="text-xs font-bold text-rose-700 uppercase">Cancelled orders</h5>
+                          <span className="text-[11px] text-rose-700">{cancelled.length}</span>
+                        </div>
+                        {cancelled.length === 0 ? (
+                          <p className="text-xs text-[#7A8692]">No cancelled orders today.</p>
+                        ) : cancelled.map(visit => (
+                          <article key={visit.id} className="p-3 bg-rose-50 rounded-lg text-xs">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <strong className="text-sm text-[#16202A]">{visit.name}</strong>
+                                <span className="ml-2 font-mono text-[#5B6875]">{visit.phone || 'No phone provided'}</span>
+                              </div>
+                              <span className="font-mono text-[#5B6875]">{clock(visit.ts)}</span>
+                            </div>
+                            <p className="mt-1 text-[#5B6875]">{visit.services.join(', ')}</p>
+                            <p className="mt-1 font-semibold text-rose-800">
+                              Reason: {visit.cancellationReason || 'No reason recorded'}
+                            </p>
+                          </article>
+                        ))}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h5 className="text-xs font-bold text-[#5B6875] uppercase">Served today</h5>
+                          <span className="text-[11px] text-[#5B6875]">{served.length} finished</span>
+                        </div>
+                        {served.length === 0 ? (
+                          <p className="text-xs text-[#7A8692]">No completed checkouts yet today.</p>
+                        ) : served.map(visit => (
+                          <article key={visit.id} className="p-3 bg-[#F2F4F6] rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <div>
+                              <strong className="text-sm text-[#16202A]">{visit.name}</strong>
+                              <span className="ml-2 font-mono text-[#5B6875]">by {visit.employee || 'Staff'}</span>
+                              <p className="mt-0.5 text-[11px] text-[#5B6875]">{visit.services.join(', ')}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                visit.pay === 'cash' ? 'bg-teal-100 text-teal-800' : 'bg-rose-100 text-[#B3315A]'
+                              }`}>
+                                {visit.pay === 'cash' ? 'Cash' : 'Card'}
+                              </span>
+                              <span className="font-bold font-mono">{money(visit.amount)}</span>
+                              {visit.tip > 0 && (
+                                <span className="text-[#5B6875] font-mono">+ {money(visit.tip)} tip</span>
+                              )}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
+              <div className="border-b border-[#D9DFE5] pb-3">
                 <h3 className="font-bold text-base text-[#16202A]">Orders &amp; Revenue Insights</h3>
                 <p className="text-xs text-[#5B6875] mt-1">
                   Daily, weekly, and month-to-date totals for each studio and both studios combined. Revenue includes completed checkouts only.
@@ -2341,72 +2422,6 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
-              </div>
-            </section>
-
-            {/* 7-Day Comparative Sales Bar Chart */}
-            <section className="bg-white border border-[#D9DFE5] rounded-xl p-6 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-[#D9DFE5] pb-3">
-                <div>
-                  <h3 className="font-bold text-base text-[#16202A]">Sales, Last 7 Days</h3>
-                  <p className="text-xs text-[#5B6875]">Comparative volume per studio location</p>
-                </div>
-                <div className="flex items-center gap-4 text-xs font-semibold">
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-xs bg-[#B3315A]" />
-                    <span>{locName(0)}</span>
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-xs bg-[#0E7C7B]" />
-                    <span>{locName(1)}</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Chart Bars */}
-              <div className="grid grid-cols-7 gap-2 pt-6 items-end h-48 border-b border-[#D9DFE5]">
-                {past7Days.map(d => {
-                  const [bc, jk] = salesByDay.map[d] || [0, 0];
-                  const max = salesByDay.max;
-                  const hBc = Math.max(bc ? 4 : 0, Math.round((bc / max) * 100));
-                  const hJk = Math.max(jk ? 4 : 0, Math.round((jk / max) * 100));
-
-                  return (
-                    <div key={d} className="flex gap-1 items-end justify-center h-full group relative">
-                      {/* Battle Creek Bar */}
-                      <div
-                        className="w-full max-w-[20px] bg-[#B3315A] rounded-t-xs transition-all relative"
-                        style={{ height: `${hBc}%` }}
-                        title={`${locName(0)}: ${money(bc)}`}
-                      >
-                        {bc > 0 && (
-                          <span className="absolute bottom-full left-1/2 -translate-x-1/2 text-[9px] text-[#5B6875] font-mono whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                            ${Math.round(bc)}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Jackson Bar */}
-                      <div
-                        className="w-full max-w-[20px] bg-[#0E7C7B] rounded-t-xs transition-all relative"
-                        style={{ height: `${hJk}%` }}
-                        title={`${locName(1)}: ${money(jk)}`}
-                      >
-                        {jk > 0 && (
-                          <span className="absolute bottom-full left-1/2 -translate-x-1/2 text-[9px] text-[#5B6875] font-mono whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                            ${Math.round(jk)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="grid grid-cols-7 gap-2 text-center text-xs text-[#5B6875] font-semibold">
-                {past7Days.map(d => (
-                  <span key={d}>{dayLabel(d)}</span>
-                ))}
               </div>
             </section>
 
