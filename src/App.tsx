@@ -23,6 +23,7 @@ import {
   Printer,
   RefreshCw,
   Users,
+  Trash2,
   Settings as SettingsIcon
 } from 'lucide-react';
 
@@ -152,7 +153,13 @@ export default function App() {
   const [countedDrawer, setCountedDrawer] = useState<string>('');
   const [isClosingDay, setIsClosingDay] = useState<boolean>(false);
   const [confirmReopen, setConfirmReopen] = useState<boolean>(false);
-  const [confirmDeleteRange, setConfirmDeleteRange] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteModalStep, setDeleteModalStep] = useState<'range' | 'confirm'>('range');
+  const [deleteRangeFrom, setDeleteRangeFrom] = useState<string>(today);
+  const [deleteRangeTo, setDeleteRangeTo] = useState<string>(today);
+  const [deleteRangeLocations, setDeleteRangeLocations] = useState<number[]>([0]);
+  const [deletePreviewVisits, setDeletePreviewVisits] = useState<VisitItem[]>([]);
+  const [isPreparingDeletion, setIsPreparingDeletion] = useState(false);
   const [isDeletingRange, setIsDeletingRange] = useState(false);
 
   // Settings edit state
@@ -898,26 +905,72 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleOpenDeleteRange = () => {
+    setDeleteRangeFrom(reportFrom);
+    setDeleteRangeTo(reportDate);
+    setDeleteRangeLocations([...reportLocs]);
+    setDeletePreviewVisits([]);
+    setDeleteModalStep('range');
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleReviewDeletion = async () => {
+    if (
+      currentUser?.role !== 'SUPER_ADMIN' ||
+      deleteRangeFrom > deleteRangeTo ||
+      deleteRangeLocations.length === 0 ||
+      isPreparingDeletion
+    ) return;
+
+    setIsPreparingDeletion(true);
+    try {
+      const visitsInRange = await salonApi.fetchVisits(
+        { from: deleteRangeFrom, to: deleteRangeTo },
+        { strict: true }
+      );
+      setDeletePreviewVisits(visitsInRange.filter(visit => deleteRangeLocations.includes(visit.loc)));
+      setDeleteModalStep('confirm');
+    } catch (err) {
+      console.error('[App] Could not prepare report range deletion', err);
+      showToast('Could not load records for this range. No records were deleted.');
+    } finally {
+      setIsPreparingDeletion(false);
+    }
+  };
+
   const handleDeleteReportRange = async () => {
-    if (!reportRangeValid || reportLocs.length === 0 || isDeletingRange) return;
+    if (
+      currentUser?.role !== 'SUPER_ADMIN' ||
+      deleteRangeFrom > deleteRangeTo ||
+      deleteRangeLocations.length === 0 ||
+      deleteModalStep !== 'confirm' ||
+      isDeletingRange
+    ) return;
+
     setIsDeletingRange(true);
     try {
       const result = await salonApi.deleteVisitRange({
-        from: reportFrom,
-        to: reportDate,
-        locations: reportLocs
+        from: deleteRangeFrom,
+        to: deleteRangeTo,
+        locations: deleteRangeLocations
       });
       if (!result.success) {
         showToast(result.error || 'Records could not be deleted.');
         return;
       }
-      setConfirmDeleteRange(false);
+      setIsDeleteModalOpen(false);
       setReportSearch('');
-      await Promise.all([
-        loadData(),
-        salonApi.fetchVisits({ from: reportFrom, to: reportDate }, { strict: true })
-          .then(setReportVisitsForDate)
-      ]);
+      try {
+        await Promise.all([
+          loadData(),
+          salonApi.fetchVisits({ from: reportFrom, to: reportDate }, { strict: true })
+            .then(setReportVisitsForDate)
+        ]);
+      } catch (err) {
+        console.error('[App] Report refresh after deletion failed', err);
+        showToast('Records were deleted, but the report could not be refreshed. Use Refresh to reload.');
+        return;
+      }
       showToast(
         `Deleted ${result.deletedVisits || 0} visit record(s) and ${result.deletedClosings || 0} day-closing record(s).`
       );
@@ -1126,14 +1179,26 @@ export default function App() {
               </button>
             ))}
             {canExportCurrentView && (
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#D9DFE5] bg-white text-[#5B6875] hover:border-[#B3315A]/50 hover:text-[#B3315A] cursor-pointer"
-              >
-                <Printer className="w-4 h-4" />
-                Export PDF
-              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[#D9DFE5] bg-white text-[#5B6875] hover:border-[#B3315A]/50 hover:text-[#B3315A] cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  Export PDF
+                </button>
+                {currentUser?.role === 'SUPER_ADMIN' && tab === 'report' && (
+                  <button
+                    type="button"
+                    onClick={handleOpenDeleteRange}
+                    className="group inline-flex items-center gap-2 rounded-lg border border-rose-800 bg-gradient-to-r from-rose-800 to-[#B3315A] px-4 py-2 text-sm font-bold text-white shadow-md shadow-rose-900/20 transition hover:-translate-y-0.5 hover:shadow-lg hover:shadow-rose-900/25 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-rose-300 cursor-pointer"
+                  >
+                    <Trash2 className="h-4 w-4 transition-transform group-hover:scale-110" />
+                    Delete records
+                  </button>
+                )}
+              </div>
             )}
             <button
               type="button"
@@ -2089,7 +2154,6 @@ export default function App() {
                     setReportFrom(event.target.value);
                     setCountedDrawer('');
                     setConfirmReopen(false);
-                    setConfirmDeleteRange(false);
                   }}
                   className="px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs font-mono font-bold"
                 />
@@ -2105,7 +2169,6 @@ export default function App() {
                     setReportDate(e.target.value);
                     setCountedDrawer('');
                     setConfirmReopen(false);
-                    setConfirmDeleteRange(false);
                   }}
                   className="px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs font-mono font-bold"
                 />
@@ -2128,7 +2191,6 @@ export default function App() {
                           });
                           setCountedDrawer('');
                           setConfirmReopen(false);
-                          setConfirmDeleteRange(false);
                         }}
                         className="accent-[#B3315A]"
                       />
@@ -2458,50 +2520,6 @@ export default function App() {
                   )}
                 </section>
 
-                <section className="min-w-0 bg-white border border-rose-200 rounded-xl p-5 shadow-xs space-y-3">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-rose-800">Delete records by date range</h3>
-                  <p className="text-xs text-[#5B6875]">
-                    Permanently delete visit records and daily closing records from {reportFrom} through {reportDate}
-                    {' '}for {reportLocationLabel}. This action cannot be undone. Customer search does not limit deletion.
-                  </p>
-                  <p className="text-xs font-semibold text-[#16202A]">
-                    Scope: {reportVisits.length} visit record(s), {closings.filter(closing =>
-                      closing.date >= reportFrom &&
-                      closing.date <= reportDate &&
-                      reportLocs.includes(closing.loc)
-                    ).length} daily closing record(s).
-                  </p>
-                  {confirmDeleteRange ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="mr-auto text-xs font-bold text-rose-800">Confirm permanent deletion for this date range and location selection.</span>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteRange(false)}
-                        disabled={isDeletingRange}
-                        className="px-3 py-1.5 bg-white border border-[#D9DFE5] text-xs font-semibold rounded disabled:opacity-50 cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDeleteReportRange}
-                        disabled={!reportRangeValid || isDeletingRange}
-                        className="px-3 py-1.5 bg-rose-700 text-white text-xs font-bold rounded disabled:opacity-50 cursor-pointer"
-                      >
-                        {isDeletingRange ? 'Deleting...' : 'Delete permanently'}
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteRange(true)}
-                      disabled={!reportRangeValid || reportLocs.length === 0}
-                      className="px-3 py-1.5 bg-white border border-rose-300 text-rose-800 text-xs font-bold rounded disabled:opacity-50 cursor-pointer"
-                    >
-                      Review deletion
-                    </button>
-                  )}
-                </section>
               </div>
             </div>
           </div>
@@ -3050,6 +3068,202 @@ export default function App() {
       </div>
 
       {/* MODALS */}
+      {isDeleteModalOpen && currentUser?.role === 'SUPER_ADMIN' && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#111820]/70 p-4 backdrop-blur-sm">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-range-title"
+            className="w-full max-w-xl overflow-hidden rounded-2xl border border-rose-100 bg-white shadow-[0_28px_90px_rgba(0,0,0,0.35)]"
+          >
+            <header className="relative overflow-hidden bg-gradient-to-br from-[#4A1225] via-rose-800 to-[#B3315A] px-6 py-6 text-white sm:px-8">
+              <div className="absolute -right-7 -top-12 h-36 w-36 rounded-full border border-white/10" />
+              <div className="relative flex items-start gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/20 bg-white/10 shadow-inner">
+                  <Trash2 className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-rose-100">
+                    Admin · Permanent action
+                  </p>
+                  <h2 id="delete-range-title" className="mt-1 font-serif text-2xl font-bold">
+                    {deleteModalStep === 'range' ? 'Choose records to delete' : 'Review before deletion'}
+                  </h2>
+                  <p className="mt-1 text-xs leading-relaxed text-white/75">
+                    {deleteModalStep === 'range'
+                      ? 'Choose a date range and location. You will review the matching records before anything is removed.'
+                      : 'Confirm the exact scope below. Deleted visits and matching daily closings cannot be restored.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  aria-label="Close delete records dialog"
+                  disabled={isDeletingRange}
+                  className="relative rounded-lg p-2 text-white/75 transition hover:bg-white/10 hover:text-white disabled:opacity-50 cursor-pointer"
+                >
+                  <span className="text-xl leading-none">×</span>
+                </button>
+              </div>
+              <div className="relative mt-5 flex items-center gap-2">
+                <span className="h-1.5 flex-1 rounded-full bg-white/90" />
+                <span className={`h-1.5 flex-1 rounded-full ${deleteModalStep === 'confirm' ? 'bg-white/90' : 'bg-white/25'}`} />
+                <span className="ml-1 text-[10px] font-bold uppercase tracking-wider text-white/75">
+                  {deleteModalStep === 'range' ? 'Step 1 of 2' : 'Step 2 of 2'}
+                </span>
+              </div>
+            </header>
+
+            {deleteModalStep === 'range' ? (
+              <div className="space-y-5 p-6 sm:p-8">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="delete-range-from" className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-[#5B6875]">
+                      Start date
+                    </label>
+                    <input
+                      id="delete-range-from"
+                      type="date"
+                      value={deleteRangeFrom}
+                      max={today}
+                      onChange={event => setDeleteRangeFrom(event.target.value)}
+                      className="w-full rounded-lg border border-[#D9DFE5] bg-[#F8F9FA] px-3 py-2.5 text-sm font-semibold text-[#16202A] outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="delete-range-to" className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-[#5B6875]">
+                      End date
+                    </label>
+                    <input
+                      id="delete-range-to"
+                      type="date"
+                      value={deleteRangeTo}
+                      max={today}
+                      onChange={event => setDeleteRangeTo(event.target.value)}
+                      className="w-full rounded-lg border border-[#D9DFE5] bg-[#F8F9FA] px-3 py-2.5 text-sm font-semibold text-[#16202A] outline-none focus:border-rose-500 focus:ring-4 focus:ring-rose-100"
+                    />
+                  </div>
+                </div>
+
+                <fieldset>
+                  <legend className="mb-2 block text-xs font-bold uppercase tracking-wide text-[#5B6875]">
+                    Locations
+                  </legend>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {settings.locations.map((name, location) => (
+                      <label
+                        key={name}
+                        className={`flex items-center gap-3 rounded-lg border p-3 text-sm font-semibold transition-colors cursor-pointer ${
+                          deleteRangeLocations.includes(location)
+                            ? 'border-rose-300 bg-rose-50 text-rose-900'
+                            : 'border-[#D9DFE5] bg-white text-[#5B6875] hover:border-rose-200'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={deleteRangeLocations.includes(location)}
+                          onChange={() => setDeleteRangeLocations(current => {
+                            if (current.includes(location)) {
+                              return current.length > 1 ? current.filter(item => item !== location) : current;
+                            }
+                            return [...current, location].sort((a, b) => a - b);
+                          })}
+                          className="h-4 w-4 accent-rose-700"
+                        />
+                        {name}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                {deleteRangeFrom > deleteRangeTo && (
+                  <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                    The start date must be on or before the end date.
+                  </p>
+                )}
+
+                <div className="flex flex-col-reverse gap-2 border-t border-[#E9EDF1] pt-4 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsDeleteModalOpen(false)}
+                    className="rounded-lg border border-[#D9DFE5] bg-white px-4 py-2.5 text-sm font-semibold text-[#5B6875] transition hover:bg-[#F2F4F6] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleReviewDeletion}
+                    disabled={deleteRangeFrom > deleteRangeTo || deleteRangeLocations.length === 0 || isPreparingDeletion}
+                    className="rounded-lg bg-gradient-to-r from-rose-800 to-[#B3315A] px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-rose-900/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                  >
+                    {isPreparingDeletion ? 'Loading matching records...' : 'Review matching records'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-5 p-6 sm:p-8">
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-700" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold text-rose-950">
+                        {deletePreviewVisits.length} visit record(s) match this selection
+                      </p>
+                      <p className="text-xs leading-relaxed text-rose-900/80">
+                        All visit records and daily closing records for the selected dates and locations will be permanently deleted. Customer search filters are not applied.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <dl className="grid grid-cols-1 gap-3 rounded-xl border border-[#E9EDF1] bg-[#F8F9FA] p-4 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-wider text-[#7A8692]">Date range</dt>
+                    <dd className="mt-1 font-semibold text-[#16202A]">{deleteRangeFrom} — {deleteRangeTo}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[10px] font-bold uppercase tracking-wider text-[#7A8692]">Locations</dt>
+                    <dd className="mt-1 font-semibold text-[#16202A]">
+                      {deleteRangeLocations.map(location => locName(location)).join(', ')}
+                    </dd>
+                  </div>
+                </dl>
+
+                <div className="flex flex-col-reverse gap-2 border-t border-[#E9EDF1] pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteModalStep('range')}
+                    disabled={isDeletingRange}
+                    className="rounded-lg border border-[#D9DFE5] bg-white px-4 py-2.5 text-sm font-semibold text-[#5B6875] transition hover:bg-[#F2F4F6] disabled:opacity-50 cursor-pointer"
+                  >
+                    Change date range
+                  </button>
+                  <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={() => setIsDeleteModalOpen(false)}
+                      disabled={isDeletingRange}
+                      className="rounded-lg border border-[#D9DFE5] bg-white px-4 py-2.5 text-sm font-semibold text-[#5B6875] transition hover:bg-[#F2F4F6] disabled:opacity-50 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteReportRange}
+                      disabled={isDeletingRange}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-rose-800 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-rose-900/20 transition hover:bg-rose-900 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {isDeletingRange ? 'Deleting records...' : 'Confirm and delete'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
       <StaffLoginModal
         isOpen={isStaffModalOpen}
         onClose={() => setIsStaffModalOpen(false)}
