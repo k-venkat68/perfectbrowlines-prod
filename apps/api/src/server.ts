@@ -861,6 +861,70 @@ app.put('/api/v1/visits/:id', async (req, res) => {
   }
 
   const { status, tip, pay, cancellationReason } = req.body || {};
+  if (status === undefined && Array.isArray(req.body?.servicesToAdd)) {
+    const requestedServices: unknown[] = req.body.servicesToAdd;
+    if (
+      Object.keys(req.body).length !== 1 ||
+      requestedServices.length === 0 ||
+      requestedServices.some(service => typeof service !== 'string' || !service.trim()) ||
+      new Set(requestedServices).size !== requestedServices.length
+    ) {
+      return res.status(400).json({ success: false, error: 'Choose one or more valid additional services.' });
+    }
+
+    const availableServices = new Map(memorySettings.services.map(service => [
+      service.n,
+      service.locationPrices?.[String(session.loc)] ?? service.p
+    ]));
+    const servicesToAdd = requestedServices as string[];
+    if (servicesToAdd.some(service => !availableServices.has(service))) {
+      return res.status(400).json({ success: false, error: 'One or more additional services are unavailable.' });
+    }
+
+    try {
+      const current = await Visit.findOne({
+        id,
+        loc: session.loc,
+        status: { $in: ['waiting', 'in_service'] }
+      }).select('services').lean();
+      if (!current) {
+        return res.status(404).json({ success: false, error: 'This open order was not found at your location.' });
+      }
+
+      const newServices = servicesToAdd.filter(service => !current.services.includes(service));
+      if (newServices.length === 0) {
+        return res.status(400).json({ success: false, error: 'Those services are already on this order.' });
+      }
+      const additionalAmount = newServices.reduce(
+        (total, service) => total + (availableServices.get(service) || 0),
+        0
+      );
+      const updated = await Visit.findOneAndUpdate(
+        {
+          id,
+          loc: session.loc,
+          status: { $in: ['waiting', 'in_service'] },
+          services: { $nin: newServices }
+        },
+        {
+          $addToSet: { services: { $each: newServices } },
+          $inc: { amount: Math.round(additionalAmount * 100) / 100 }
+        },
+        { new: true, runValidators: true }
+      ).lean();
+      if (!updated) {
+        return res.status(409).json({ success: false, error: 'This order changed while you were adding services. Refresh and try again.' });
+      }
+
+      const index = memoryVisits.findIndex(visit => visit.id === id);
+      if (index !== -1) memoryVisits[index] = { ...memoryVisits[index], ...updated } as IVisitDoc;
+      return res.json({ success: true, visit: updated, source: 'mongodb' });
+    } catch (err) {
+      console.error('[MongoDB visit additional service error]:', err);
+      return res.status(500).json({ success: false, error: 'Could not add services to this order.' });
+    }
+  }
+
   if (status === 'in_service') {
     if (Object.keys(req.body || {}).length !== 1) {
       return res.status(400).json({ success: false, error: 'Starting service only accepts a status update.' });
@@ -939,6 +1003,59 @@ app.put('/api/v1/visits/:id', async (req, res) => {
   } catch (err) {
     console.error('[MongoDB visit checkout error]:', err);
     return res.status(500).json({ success: false, error: 'Could not save checkout. Please try again.' });
+  }
+});
+
+app.delete('/api/v1/visits', async (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'SUPER_ADMIN') {
+    return res.status(403).json({ success: false, error: 'Admin sign-in is required.' });
+  }
+
+  const { from, to, locations } = req.body || {};
+  const isCalendarDate = (value: unknown): value is string => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  if (
+    !isCalendarDate(from) ||
+    !isCalendarDate(to) ||
+    from > to ||
+    !Array.isArray(locations) ||
+    locations.length === 0 ||
+    locations.some((location: unknown) => !Number.isInteger(location) || (location !== 0 && location !== 1)) ||
+    new Set(locations).size !== locations.length
+  ) {
+    return res.status(400).json({ success: false, error: 'Choose a valid date range and one or more locations.' });
+  }
+  if (!isMongoReady()) {
+    return res.status(503).json({ success: false, error: 'MongoDB is unavailable. Records were not deleted.' });
+  }
+
+  try {
+    const scope = { date: { $gte: from, $lte: to }, loc: { $in: locations as number[] } };
+    const [visits, closings] = await Promise.all([
+      Visit.deleteMany(scope),
+      Closing.deleteMany(scope)
+    ]);
+    memoryVisits = memoryVisits.filter(
+      visit => !(visit.date >= from && visit.date <= to && locations.includes(visit.loc))
+    );
+    memoryClosings = memoryClosings.filter(
+      closing => !(closing.date >= from && closing.date <= to && locations.includes(closing.loc))
+    );
+    console.warn(
+      `[Admin record deletion] ${session.username} removed ${visits.deletedCount || 0} visits and ${closings.deletedCount || 0} closings for ${from} through ${to} at locations ${locations.join(',')}.`
+    );
+    return res.json({
+      success: true,
+      deletedVisits: visits.deletedCount || 0,
+      deletedClosings: closings.deletedCount || 0
+    });
+  } catch (err) {
+    console.error('[MongoDB visit range deletion failed]:', err);
+    return res.status(500).json({ success: false, error: 'Could not delete records for this range.' });
   }
 });
 

@@ -70,9 +70,19 @@ function formatUsPhone(value: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
+function getPreferredLocation(): number | null {
+  try {
+    const saved = window.localStorage.getItem('pbl-default-location');
+    return saved === '0' || saved === '1' ? Number(saved) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   const prefersReducedMotion = useReducedMotion();
-  const [loc, setLoc] = useState<number>(0); // 0 = Battle Creek, 1 = Jackson
+  const [loc, setLoc] = useState<number>(() => getPreferredLocation() ?? 0); // 0 = Battle Creek, 1 = Jackson
+  const [saveDefaultLocation, setSaveDefaultLocation] = useState(() => getPreferredLocation() !== null);
   const [tab, setTab] = useState<'checkin' | 'queue' | 'analytics' | 'report' | 'owner' | 'settings'>('checkin');
   const [currentUser, setCurrentUser] = useState<SalonUser | null>(null);
 
@@ -130,14 +140,20 @@ export default function App() {
   const [cancelingVisitId, setCancelingVisitId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
   const [drafts, setDrafts] = useState<Record<string, { pay: 'cash' | 'card'; tip: number | '' }>>({});
+  const [serviceAddOpenVisitId, setServiceAddOpenVisitId] = useState<string | null>(null);
+  const [serviceAddDrafts, setServiceAddDrafts] = useState<Record<string, string[]>>({});
 
   // Closing Report state
+  const [reportFrom, setReportFrom] = useState<string>(today);
   const [reportDate, setReportDate] = useState<string>(today);
   const [reportLocs, setReportLocs] = useState<number[]>([0]);
   const [reportVisitsForDate, setReportVisitsForDate] = useState<VisitItem[]>([]);
+  const [reportSearch, setReportSearch] = useState('');
   const [countedDrawer, setCountedDrawer] = useState<string>('');
   const [isClosingDay, setIsClosingDay] = useState<boolean>(false);
   const [confirmReopen, setConfirmReopen] = useState<boolean>(false);
+  const [confirmDeleteRange, setConfirmDeleteRange] = useState(false);
+  const [isDeletingRange, setIsDeletingRange] = useState(false);
 
   // Settings edit state
   const [staffText, setStaffText] = useState<string>('');
@@ -188,10 +204,27 @@ export default function App() {
     service.locationPrices?.[String(location)] ?? service.p;
   const selectLocation = (location: number) => {
     setLoc(location);
+    if (!currentUser && saveDefaultLocation) {
+      try {
+        window.localStorage.setItem('pbl-default-location', String(location));
+      } catch {
+        showToast('Could not save your default location in this browser.');
+      }
+    }
     setReportLocs([location]);
     setServicePriceLocation(location);
     setAnalyticsLocation(location === 0 ? '0' : '1');
     setOpenVisitId(null);
+  };
+
+  const handleSaveDefaultLocation = (checked: boolean) => {
+    try {
+      if (checked) window.localStorage.setItem('pbl-default-location', String(loc));
+      else window.localStorage.removeItem('pbl-default-location');
+      setSaveDefaultLocation(checked);
+    } catch {
+      showToast('Could not update your default location in this browser.');
+    }
   };
 
   // Load initial data & connect with MongoDB
@@ -283,7 +316,9 @@ export default function App() {
         { strict: true }
       );
       const reportRequest = currentUser?.role === 'SUPER_ADMIN'
-        ? salonApi.fetchVisits({ date: reportDate }, { strict: true })
+        ? reportFrom <= reportDate
+          ? salonApi.fetchVisits({ from: reportFrom, to: reportDate }, { strict: true })
+          : Promise.resolve([])
         : Promise.resolve(null);
       const [baseDataLoaded, analyticsResults, reportResults] = await Promise.all([
         loadData(),
@@ -356,14 +391,14 @@ export default function App() {
   );
 
   useEffect(() => {
-    if (currentUser?.role !== 'SUPER_ADMIN') {
+    if (currentUser?.role !== 'SUPER_ADMIN' || reportFrom > reportDate) {
       setReportVisitsForDate([]);
       return;
     }
 
     let active = true;
     const loadReportVisits = async () => {
-      const results = await salonApi.fetchVisits({ date: reportDate });
+      const results = await salonApi.fetchVisits({ from: reportFrom, to: reportDate });
       if (active) setReportVisitsForDate(results);
     };
 
@@ -371,7 +406,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [currentUser, reportDate]);
+  }, [currentUser, reportFrom, reportDate]);
 
   const reportLocationLabel = useMemo(
     () => reportLocs.map(location => locName(location)).join(' + '),
@@ -381,6 +416,15 @@ export default function App() {
     () => reportVisitsForDate.filter(visit => reportLocs.includes(visit.loc)).sort((a, b) => a.ts - b.ts),
     [reportVisitsForDate, reportLocs]
   );
+  const filteredReportVisits = useMemo(() => {
+    const query = reportSearch.trim().toLocaleLowerCase();
+    if (!query) return reportVisits;
+    return reportVisits.filter(visit =>
+      [visit.name, visit.phone, visit.services.join(' '), visit.employee]
+        .some(value => value.toLocaleLowerCase().includes(query))
+    );
+  }, [reportSearch, reportVisits]);
+  const reportRangeValid = reportFrom <= reportDate;
 
   // Stats calculation
   const computeStats = (vs: VisitItem[]) => {
@@ -427,7 +471,7 @@ export default function App() {
     return { n: countDone, sales, cash, credit, cardFees, tips, tipCash, tipCredit, waiting, inService, cancelled, by };
   };
 
-  const reportStats = useMemo(() => computeStats(reportVisits), [reportVisits]);
+  const reportStats = useMemo(() => computeStats(filteredReportVisits), [filteredReportVisits]);
   const selectedClosings = useMemo(
     () => reportLocs.map(location => closings.find(closing => closing.id === `${location}_${reportDate}`) || null),
     [closings, reportDate, reportLocs]
@@ -572,10 +616,42 @@ export default function App() {
     }
   };
 
+  const toggleAdditionalService = (visitId: string, serviceName: string) => {
+    setServiceAddDrafts(current => {
+      const selected = current[visitId] || [];
+      return {
+        ...current,
+        [visitId]: selected.includes(serviceName)
+          ? selected.filter(name => name !== serviceName)
+          : [...selected, serviceName]
+      };
+    });
+  };
+
+  const handleAddServices = async (visitId: string) => {
+    const servicesToAdd = serviceAddDrafts[visitId] || [];
+    if (servicesToAdd.length === 0 || updatingVisitId) return;
+
+    setUpdatingVisitId(visitId);
+    try {
+      const updated = await salonApi.updateVisit(visitId, { servicesToAdd });
+      if (!updated) {
+        showToast('Additional services were not saved. Refresh the queue and try again.');
+        return;
+      }
+      setVisits(previous => previous.map(visit => visit.id === visitId ? updated : visit));
+      setServiceAddDrafts(previous => ({ ...previous, [visitId]: [] }));
+      setServiceAddOpenVisitId(null);
+      showToast('Additional services added to the order.');
+    } finally {
+      setUpdatingVisitId(null);
+    }
+  };
+
   // Close Day (Pushes to MongoDB)
   const handleCloseDay = async () => {
-    if (reportLocs.length !== 1) {
-      showToast('Select one location to close its day.');
+    if (reportLocs.length !== 1 || reportFrom !== reportDate) {
+      showToast('Select one location and a single date to close its day.');
       return;
     }
     setIsClosingDay(true);
@@ -610,8 +686,8 @@ export default function App() {
 
   // Reopen Day
   const handleReopenDay = async () => {
-    if (reportLocs.length !== 1) {
-      showToast('Select one location to reopen its day.');
+    if (reportLocs.length !== 1 || reportFrom !== reportDate) {
+      showToast('Select one location and a single date to reopen its day.');
       return;
     }
     const reportLoc = reportLocs[0];
@@ -769,7 +845,7 @@ export default function App() {
     const st = reportStats;
     const cl = currentClosing;
     const lines = [
-      `${reportLocationLabel} - ${longDay(reportDate)}`,
+      `${reportLocationLabel} - ${reportFrom} through ${reportDate}`,
       `Customers served: ${st.n}`,
       `Total sales: ${money(st.sales)}`,
       `Cash sales: ${money(st.cash)}`,
@@ -778,14 +854,79 @@ export default function App() {
       `Tips: ${money(st.tips)} (cash ${money(st.tipCash)}, card ${money(st.tipCredit)})`,
       ...Object.keys(st.by).map(k => `  ${k}: ${st.by[k].n} clients, ${money(st.by[k].sales)}, tips ${money(st.by[k].tips)}`),
       'Client records:',
-      ...reportVisits.map(visit =>
-        `  ${visit.name} · ${visit.phone || 'No phone'} · ${visit.status}${visit.status === 'cancelled' ? ` · Reason: ${visit.cancellationReason || 'Not recorded'}` : ''}`
+      ...filteredReportVisits.map(visit =>
+        `  ${visit.date} · ${visit.name} · ${visit.phone || 'No phone'} · ${visit.services.join(', ')} · ${money(visit.amount)} · tip ${money(visit.tip)} · ${visit.pay || 'unpaid'} · ${visit.status}${visit.status === 'cancelled' ? ` · Reason: ${visit.cancellationReason || 'Not recorded'}` : ''}`
       ),
       cl && cl.counted != null ? `Cash counted: ${money(cl.counted)} (expected ${money(st.cash + st.tipCash)})` : ''
     ].filter(Boolean);
 
     navigator.clipboard.writeText(lines.join('\n'));
     showToast('Till summary copied to clipboard.');
+  };
+
+  const handleExportReportCsv = () => {
+    const csvValue = (value: string | number) => {
+      const text = String(value);
+      const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
+    const rows = [
+      ['Date', 'Time', 'Location', 'Customer', 'Phone', 'Services', 'Amount', 'Tip', 'Payment method', 'Card fee', 'Employee', 'Status'],
+      ...filteredReportVisits.map(visit => [
+        visit.date,
+        new Date(visit.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        locName(visit.loc),
+        visit.name,
+        visit.phone,
+        visit.services.join(', '),
+        visit.amount,
+        visit.tip,
+        visit.pay || 'Unpaid',
+        visit.cardFee || 0,
+        visit.employee,
+        visit.status
+      ])
+    ];
+    const csv = `\uFEFF${rows.map(row => row.map(csvValue).join(',')).join('\r\n')}`;
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `perfect-browlines-report-${reportFrom}-to-${reportDate}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDeleteReportRange = async () => {
+    if (!reportRangeValid || reportLocs.length === 0 || isDeletingRange) return;
+    setIsDeletingRange(true);
+    try {
+      const result = await salonApi.deleteVisitRange({
+        from: reportFrom,
+        to: reportDate,
+        locations: reportLocs
+      });
+      if (!result.success) {
+        showToast(result.error || 'Records could not be deleted.');
+        return;
+      }
+      setConfirmDeleteRange(false);
+      setReportSearch('');
+      await Promise.all([
+        loadData(),
+        salonApi.fetchVisits({ from: reportFrom, to: reportDate }, { strict: true })
+          .then(setReportVisitsForDate)
+      ]);
+      showToast(
+        `Deleted ${result.deletedVisits || 0} visit record(s) and ${result.deletedClosings || 0} day-closing record(s).`
+      );
+    } catch (err) {
+      console.error('[App] Report range deletion failed', err);
+      showToast('Could not delete records. Check the connection and try again.');
+    } finally {
+      setIsDeletingRange(false);
+    }
   };
 
   // Overall Today Stats
@@ -848,7 +989,7 @@ export default function App() {
   const adminTabs = [
     { id: 'owner', label: 'Overview', Icon: TrendingUp },
     { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
-    { id: 'report', label: 'Closing report', Icon: Receipt },
+    { id: 'report', label: 'Reports', Icon: Receipt },
     { id: 'settings', label: 'Settings', Icon: SettingsIcon }
   ] as const;
   const canExportCurrentView = currentUser && (
@@ -856,7 +997,7 @@ export default function App() {
     (currentUser.role === 'LOCATION_OPERATOR' && tab === 'analytics')
   );
   const printTitle = tab === 'report'
-    ? `Closing report · ${reportLocationLabel} · ${longDay(reportDate)}`
+    ? `Reports · ${reportLocationLabel} · ${reportFrom} to ${reportDate}`
     : tab === 'analytics'
       ? `${currentUser?.role === 'SUPER_ADMIN' ? 'Business analytics' : 'Operator earnings'} · ${analyticsDateRange.label} · ${
           currentUser?.role === 'SUPER_ADMIN'
@@ -1036,6 +1177,16 @@ export default function App() {
                   Welcome. Tell us what you need.
                 </h2>
               </div>
+
+              <label className="inline-flex items-center gap-2 text-sm font-medium text-[#5B6875] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={saveDefaultLocation}
+                  onChange={event => handleSaveDefaultLocation(event.target.checked)}
+                  className="h-4 w-4 accent-[#B3315A]"
+                />
+                Make {locName(loc)} my default location for future check-ins
+              </label>
 
               <form onSubmit={handleCheckin} className="space-y-5">
                 {/* Name */}
@@ -1286,6 +1437,55 @@ export default function App() {
                           ))}
                         </div>
                         <p className="text-sm font-bold text-[#16202A] mt-2">Order total: {money(v.amount)}</p>
+
+                        {serviceAddOpenVisitId === v.id ? (
+                          <div className="mt-3 rounded-lg border border-[#D9DFE5] bg-[#F8F9FA] p-3 space-y-3">
+                            <p className="text-xs font-bold text-[#16202A]">Add services to this order</p>
+                            <div className="flex flex-wrap gap-2">
+                              {settings.services.filter(service => !v.services.includes(service.n)).map(service => (
+                                <label
+                                  key={service.n}
+                                  className="inline-flex items-center gap-2 rounded-md border border-[#D9DFE5] bg-white px-2.5 py-2 text-xs font-medium cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={(serviceAddDrafts[v.id] || []).includes(service.n)}
+                                    onChange={() => toggleAdditionalService(v.id, service.n)}
+                                    className="accent-[#B3315A]"
+                                  />
+                                  {service.n} · {money(servicePrice(service, loc))}
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setServiceAddOpenVisitId(null)}
+                                className="px-3 py-1.5 bg-white border border-[#D9DFE5] text-[#5B6875] text-xs font-semibold rounded cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleAddServices(v.id)}
+                                disabled={updatingVisitId === v.id || !(serviceAddDrafts[v.id] || []).length}
+                                className="px-3 py-1.5 bg-[#0E7C7B] text-white text-xs font-bold rounded disabled:opacity-50 cursor-pointer"
+                              >
+                                {updatingVisitId === v.id ? 'Saving...' : 'Add selected services'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          settings.services.some(service => !v.services.includes(service.n)) && (
+                            <button
+                              type="button"
+                              onClick={() => setServiceAddOpenVisitId(v.id)}
+                              className="mt-2 px-3 py-1.5 bg-white border border-[#D9DFE5] text-[#5B6875] text-xs font-semibold rounded hover:border-[#B3315A]/50 cursor-pointer"
+                            >
+                              Add service
+                            </button>
+                          )
+                        )}
 
                         {v.note && (
                           <p className="text-xs text-[#5B6875] mt-1.5 italic">Note: {v.note}</p>
@@ -1879,8 +2079,25 @@ export default function App() {
             {/* Filter Bar */}
             <div className="print-hidden p-4 bg-white border border-[#D9DFE5] rounded-xl flex flex-wrap items-end gap-3 shadow-xs">
               <div>
-                <label className="block text-xs font-bold text-[#5B6875] mb-1">Date</label>
+                <label htmlFor="report-from" className="block text-xs font-bold text-[#5B6875] mb-1">From</label>
                 <input
+                  id="report-from"
+                  type="date"
+                  value={reportFrom}
+                  max={today}
+                  onChange={event => {
+                    setReportFrom(event.target.value);
+                    setCountedDrawer('');
+                    setConfirmReopen(false);
+                    setConfirmDeleteRange(false);
+                  }}
+                  className="px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs font-mono font-bold"
+                />
+              </div>
+              <div>
+                <label htmlFor="report-to" className="block text-xs font-bold text-[#5B6875] mb-1">To</label>
+                <input
+                  id="report-to"
                   type="date"
                   value={reportDate}
                   max={today}
@@ -1888,6 +2105,7 @@ export default function App() {
                     setReportDate(e.target.value);
                     setCountedDrawer('');
                     setConfirmReopen(false);
+                    setConfirmDeleteRange(false);
                   }}
                   className="px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs font-mono font-bold"
                 />
@@ -1910,6 +2128,7 @@ export default function App() {
                           });
                           setCountedDrawer('');
                           setConfirmReopen(false);
+                          setConfirmDeleteRange(false);
                         }}
                         className="accent-[#B3315A]"
                       />
@@ -1919,14 +2138,43 @@ export default function App() {
                 </div>
               </fieldset>
 
-              <div className="ml-auto">
-                <span className={`px-3 py-1 rounded text-xs font-bold ${
-                  selectedClosings.every(Boolean) ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
-                }`}>
-                  {selectedClosings.filter(Boolean).length} of {selectedClosings.length} {selectedClosings.length === 1 ? 'location closed' : 'locations closed'}
-                </span>
+              <div className="min-w-[220px] flex-1">
+                <label htmlFor="report-search" className="block text-xs font-bold text-[#5B6875] mb-1">Find customer</label>
+                <input
+                  id="report-search"
+                  type="search"
+                  value={reportSearch}
+                  onChange={event => setReportSearch(event.target.value)}
+                  placeholder="Name, phone, service, or employee"
+                  className="w-full px-3 py-1.5 bg-[#F2F4F6] border border-[#D9DFE5] rounded text-xs"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 ml-auto">
+                {reportFrom === reportDate && (
+                  <span className={`px-3 py-1 rounded text-xs font-bold ${
+                    selectedClosings.every(Boolean) ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                  }`}>
+                    {selectedClosings.filter(Boolean).length} of {selectedClosings.length} {selectedClosings.length === 1 ? 'location closed' : 'locations closed'}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={handleExportReportCsv}
+                  disabled={!reportRangeValid}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-[#D9DFE5] bg-white text-xs font-semibold text-[#5B6875] hover:border-[#B3315A]/50 disabled:opacity-50 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Export Excel
+                </button>
               </div>
             </div>
+
+            {!reportRangeValid && (
+              <p role="alert" className="text-sm font-semibold text-rose-700">
+                The start date must be on or before the end date.
+              </p>
+            )}
 
             <div className="print-closing-layout grid grid-cols-1 md:grid-cols-2 items-stretch gap-4">
               {/* Authentic Till Slip Receipt */}
@@ -1935,7 +2183,7 @@ export default function App() {
                   {reportLocationLabel}
                 </div>
                 <div className="text-center text-xs text-[#5B6875]">
-                  {longDay(reportDate)}
+                  {reportFrom === reportDate ? longDay(reportDate) : `${reportFrom} — ${reportDate}`}
                 </div>
                 <div className="border-t-2 border-dashed border-[#D9DFE5] my-2" />
 
@@ -2005,30 +2253,44 @@ export default function App() {
                 <section className="min-w-0 bg-white border border-[#D9DFE5] rounded-xl p-5 shadow-xs space-y-3">
                   <div>
                     <h3 className="text-sm font-bold uppercase tracking-wider text-[#16202A]">Client records</h3>
-                    <p className="text-xs text-[#5B6875] mt-1">All orders for {longDay(reportDate)}, including cancellations.</p>
+                    <p className="text-xs text-[#5B6875] mt-1">
+                      Orders from {reportFrom} through {reportDate} at {reportLocationLabel}, including cancellations.
+                    </p>
                   </div>
-                  {reportVisits.length === 0 ? (
-                    <p className="text-xs text-[#5B6875]">No client records for this date.</p>
+                  {filteredReportVisits.length === 0 ? (
+                    <p className="text-xs text-[#5B6875]">
+                      {reportVisits.length > 0 ? 'No records match this customer search.' : 'No client records in this range.'}
+                    </p>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="complete-grid w-full min-w-[560px] text-xs">
+                      <table className="complete-grid w-full min-w-[1050px] text-xs">
                         <thead>
                           <tr className="border-b border-[#D9DFE5] text-left text-[#5B6875] uppercase tracking-wide">
+                            <th className="py-2 pr-3">Date</th>
+                            <th className="py-2 px-2">Location</th>
                             <th className="py-2 pr-3">Client</th>
                             <th className="py-2 px-2">Phone</th>
+                            <th className="py-2 px-2">Services</th>
+                            <th className="py-2 px-2 text-right">Amount</th>
+                            <th className="py-2 px-2 text-right">Tip</th>
+                            <th className="py-2 px-2">Payment</th>
+                            <th className="py-2 px-2">Employee</th>
                             <th className="py-2 px-2">Status</th>
-                            <th className="py-2 pl-2">Cancellation reason</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-[#E9EDF1]">
-                          {reportVisits.map(visit => (
+                          {filteredReportVisits.map(visit => (
                             <tr key={visit.id}>
+                              <td className="py-2 pr-3 whitespace-nowrap">{visit.date} · {clock(visit.ts)}</td>
+                              <td className="py-2 px-2">{locName(visit.loc)}</td>
                               <td className="py-2 pr-3 font-semibold text-[#16202A]">{visit.name}</td>
                               <td className="py-2 px-2 text-[#5B6875]">{visit.phone || '—'}</td>
+                              <td className="py-2 px-2">{visit.services.join(', ')}</td>
+                              <td className="py-2 px-2 text-right font-mono">{money(visit.amount)}</td>
+                              <td className="py-2 px-2 text-right font-mono">{money(visit.tip)}</td>
+                              <td className="py-2 px-2 capitalize">{visit.pay || '—'}</td>
+                              <td className="py-2 px-2">{visit.employee || '—'}</td>
                               <td className="py-2 px-2 capitalize text-[#5B6875]">{visit.status.replace('_', ' ')}</td>
-                              <td className="py-2 pl-2 text-rose-800">
-                                {visit.status === 'cancelled' ? visit.cancellationReason || 'No reason recorded' : '—'}
-                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -2079,7 +2341,13 @@ export default function App() {
                     Close the Day
                   </h3>
 
-                  {reportLocs.length > 1 ? (
+                  {!reportRangeValid ? (
+                    <p className="text-xs text-rose-700">Choose a valid date range first.</p>
+                  ) : reportFrom !== reportDate ? (
+                    <p className="text-xs text-[#5B6875]">
+                      Daily closing and reconciliation are available when the report covers a single date.
+                    </p>
+                  ) : reportLocs.length > 1 ? (
                     <div className="space-y-3">
                       <p className="text-xs text-[#5B6875]">
                         This report combines multiple locations. Select one location above to close or reopen its day.
@@ -2187,6 +2455,51 @@ export default function App() {
                         </button>
                       </div>
                     </div>
+                  )}
+                </section>
+
+                <section className="min-w-0 bg-white border border-rose-200 rounded-xl p-5 shadow-xs space-y-3">
+                  <h3 className="text-sm font-bold uppercase tracking-wider text-rose-800">Delete records by date range</h3>
+                  <p className="text-xs text-[#5B6875]">
+                    Permanently delete visit records and daily closing records from {reportFrom} through {reportDate}
+                    {' '}for {reportLocationLabel}. This action cannot be undone. Customer search does not limit deletion.
+                  </p>
+                  <p className="text-xs font-semibold text-[#16202A]">
+                    Scope: {reportVisits.length} visit record(s), {closings.filter(closing =>
+                      closing.date >= reportFrom &&
+                      closing.date <= reportDate &&
+                      reportLocs.includes(closing.loc)
+                    ).length} daily closing record(s).
+                  </p>
+                  {confirmDeleteRange ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="mr-auto text-xs font-bold text-rose-800">Confirm permanent deletion for this date range and location selection.</span>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteRange(false)}
+                        disabled={isDeletingRange}
+                        className="px-3 py-1.5 bg-white border border-[#D9DFE5] text-xs font-semibold rounded disabled:opacity-50 cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteReportRange}
+                        disabled={!reportRangeValid || isDeletingRange}
+                        className="px-3 py-1.5 bg-rose-700 text-white text-xs font-bold rounded disabled:opacity-50 cursor-pointer"
+                      >
+                        {isDeletingRange ? 'Deleting...' : 'Delete permanently'}
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteRange(true)}
+                      disabled={!reportRangeValid || reportLocs.length === 0}
+                      className="px-3 py-1.5 bg-white border border-rose-300 text-rose-800 text-xs font-bold rounded disabled:opacity-50 cursor-pointer"
+                    >
+                      Review deletion
+                    </button>
                   )}
                 </section>
               </div>

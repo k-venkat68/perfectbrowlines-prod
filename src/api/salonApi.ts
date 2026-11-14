@@ -101,6 +101,7 @@ export const salonApi = {
       | { status: 'in_service' }
       | { status: 'done'; tip: number; pay: 'cash' | 'card' }
       | { status: 'cancelled'; cancellationReason: string }
+      | { servicesToAdd: string[] }
   ): Promise<VisitItem | null> {
     try {
       const res = await fetch(`/api/v1/visits/${id}`, {
@@ -117,6 +118,30 @@ export const salonApi = {
     } catch (err) {
       console.error('[salonApi] updateVisit error', err);
       return null;
+    }
+  },
+
+  async deleteVisitRange(
+    payload: { from: string; to: string; locations: number[] }
+  ): Promise<{ success: boolean; deletedVisits?: number; deletedClosings?: number; error?: string }> {
+    try {
+      const res = await fetch('/api/v1/visits', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || `Record deletion failed (HTTP ${res.status}).` };
+      }
+      return {
+        success: true,
+        deletedVisits: data.deletedVisits,
+        deletedClosings: data.deletedClosings
+      };
+    } catch (err) {
+      console.error('[salonApi] delete visit range failed', err);
+      return { success: false, error: 'Could not reach the server. Records were not deleted.' };
     }
   },
 
